@@ -119,7 +119,18 @@ const UserSchema = new Schema({
     tokenVersion: {
         type: Number,
         default: 0
-    }
+    },
+    isOnline: {
+        type: Boolean,
+        default: false
+    },
+
+    lastSeen: {
+        type: Date,
+        default: null
+    },
+
+    lastSeenAt: Date
 }, { timestamps: true })
 
 UserSchema.pre("save", async function () {
