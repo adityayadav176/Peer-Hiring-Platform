@@ -24,20 +24,6 @@ export const initializeSocket = (io) => {
             socket.user._id
         );
 
-        // ==========================================
-        // PERSONAL USER ROOM
-        // ==========================================
-        // This is VERY IMPORTANT.
-        //
-        // We use this room to send:
-        // - message_delivered
-        // - message_read
-        // - other private events
-        //
-        // Example:
-        // io.to(userId).emit(...)
-        // ==========================================
-
         const userRoom =
             socket.user._id.toString();
 
@@ -531,7 +517,7 @@ export const initializeSocket = (io) => {
                     // ==================================
 
                     const alreadyRead =
-                        message.read?.some(
+                        message.readBy?.some(
                             (item) =>
                                 item.user
                                     ?.toString() ===
@@ -546,11 +532,11 @@ export const initializeSocket = (io) => {
                         new Date();
 
                     if (!alreadyRead) {
-                        if (!message.read) {
-                            message.read = [];
+                        if (!message.readBy) {
+                            message.readBy = [];
                         }
 
-                        message.read.push({
+                        message.readBy.push({
                             user: userId,
 
                             readAt,
