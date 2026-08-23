@@ -835,45 +835,105 @@ export const initializeSocket = (io) => {
         // typing indigator 
         // ==========================================
 
- socket.on("typing_start", ({ conversationId, receiverId, conversationType }) => {
-    if (!conversationId) return;
+        socket.on("typing_start", ({ conversationId, receiverId, conversationType }) => {
+            if (!conversationId) return;
 
-    const typingData = {
-        conversationId,
-        userId: socket.userId,
-        userName: socket.user?.name || "Someone",
-        isTyping: true,
-    };
+            const typingData = {
+                conversationId,
+                userId: socket.userId,
+                userName: socket.user?.name || "Someone",
+                isTyping: true,
+            };
 
-    if (conversationType === "group") {
-        socket.to(`conversation:${conversationId}`).emit(
-            "user_typing",
-            typingData
-        );
-    } else if (receiverId) {
-        io.to(receiverId).emit("user_typing", typingData);
-    }
-});
+            if (conversationType === "group") {
+                socket.to(`conversation:${conversationId}`).emit(
+                    "user_typing",
+                    typingData
+                );
+            } else if (receiverId) {
+                io.to(receiverId).emit("user_typing", typingData);
+            }
+        });
 
-socket.on("typing_stop", ({ conversationId, receiverId, conversationType }) => {
-    if (!conversationId) return;
+        socket.on("typing_stop", ({ conversationId, receiverId, conversationType }) => {
+            if (!conversationId) return;
 
-    const typingData = {
-        conversationId,
-        userId: socket.userId,
-        userName: socket.user?.name || "Someone",
-        isTyping: false,
-    };
+            const typingData = {
+                conversationId,
+                userId: socket.userId,
+                userName: socket.user?.name || "Someone",
+                isTyping: false,
+            };
 
-    if (conversationType === "group") {
-        socket.to(`conversation:${conversationId}`).emit(
-            "user_typing",
-            typingData
-        );
-    } else if (receiverId) {
-        io.to(receiverId).emit("user_typing", typingData);
-    }
-});
+            if (conversationType === "group") {
+                socket.to(`conversation:${conversationId}`).emit(
+                    "user_typing",
+                    typingData
+                );
+            } else if (receiverId) {
+                io.to(receiverId).emit("user_typing", typingData);
+            }
+        });
+
+        // =========================================
+        // edit emssage 
+        // =========================================
+
+        socket.on("edit_message", async ({ messageId, content }) => {
+            try {
+                if (!messageId || !content?.trim()) {
+                    socket.emit("message_error", {
+                        message: "Message ID and content are required",
+                    });
+                    return;
+                }
+
+                const message = await Message.findById(messageId);
+
+                if (!message) {
+                    socket.emit("message_error", {
+                        message: "Message not found",
+                    });
+                    return;
+                }
+
+                // Only message sender can edit
+                if (message.sender.toString() !== socket.userId.toString()) {
+                    socket.emit("message_error", {
+                        message: "You can only edit your own messages",
+                    });
+                    return;
+                }
+
+                // Don't allow editing deleted messages
+                if (message.isDeleted) {
+                    socket.emit("message_error", {
+                        message: "Deleted message cannot be edited",
+                    });
+                    return;
+                }
+
+                message.content = content.trim();
+                message.isEdited = true;
+                message.editedAt = new Date();
+
+                await message.save();
+
+                io.to(message.conversation.toString()).emit("message_edited", {
+                    messageId: message._id,
+                    content: message.content,
+                    isEdited: message.isEdited,
+                    editedAt: message.editedAt,
+                });
+
+            } catch (error) {
+                console.error("Edit message socket error:", error);
+
+                socket.emit("message_error", {
+                    message: "Failed to edit message",
+                });
+            }
+        });
 
         // ==========================================
         // DISCONNECT
