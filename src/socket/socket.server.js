@@ -936,6 +936,58 @@ export const initializeSocket = (io) => {
         });
 
         // ==========================================
+        // delete message
+        // ==========================================
+
+        socket.on("delete_message", async ({ messageId }) => {
+    try {
+        if (!messageId) {
+            socket.emit("message_error", {
+                message: "Message ID is required",
+            });
+            return;
+        }
+
+        const message = await Message.findById(messageId);
+
+        if (!message) {
+            socket.emit("message_error", {
+                message: "Message not found",
+            });
+            return;
+        }
+
+        // Only sender can delete their message
+        if (message.sender.toString() !== socket.user._id.toString()) {
+            socket.emit("message_error", {
+                message: "You can only delete your own message",
+            });
+            return;
+        }
+
+        // Soft delete
+        message.isDeleted = true;
+        message.deletedAt = new Date();
+        message.content = "";
+
+        await message.save();
+
+        // Send updated message to everyone in conversation
+        io.to(message.conversation.toString()).emit("message_deleted", {
+            messageId: message._id,
+            conversationId: message.conversation,
+        });
+
+    } catch (error) {
+        console.error("delete_message error:", error);
+
+        socket.emit("message_error", {
+            message: "Failed to delete message",
+        });
+    }
+        });
+
+        // ==========================================
         // DISCONNECT
         // ==========================================
 
