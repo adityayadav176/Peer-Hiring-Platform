@@ -832,6 +832,50 @@ export const initializeSocket = (io) => {
         );
 
         // ==========================================
+        // typing indigator 
+        // ==========================================
+
+ socket.on("typing_start", ({ conversationId, receiverId, conversationType }) => {
+    if (!conversationId) return;
+
+    const typingData = {
+        conversationId,
+        userId: socket.userId,
+        userName: socket.user?.name || "Someone",
+        isTyping: true,
+    };
+
+    if (conversationType === "group") {
+        socket.to(`conversation:${conversationId}`).emit(
+            "user_typing",
+            typingData
+        );
+    } else if (receiverId) {
+        io.to(receiverId).emit("user_typing", typingData);
+    }
+});
+
+socket.on("typing_stop", ({ conversationId, receiverId, conversationType }) => {
+    if (!conversationId) return;
+
+    const typingData = {
+        conversationId,
+        userId: socket.userId,
+        userName: socket.user?.name || "Someone",
+        isTyping: false,
+    };
+
+    if (conversationType === "group") {
+        socket.to(`conversation:${conversationId}`).emit(
+            "user_typing",
+            typingData
+        );
+    } else if (receiverId) {
+        io.to(receiverId).emit("user_typing", typingData);
+    }
+});
+
+        // ==========================================
         // DISCONNECT
         // ==========================================
 
