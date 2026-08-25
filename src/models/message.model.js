@@ -16,20 +16,46 @@ const attachmentSchema = new Schema(
         },
 
         originalName: {
-            type: String
+            type: String,
+            default: null
         },
 
         mimeType: {
-            type: String
+            type: String,
+            default: null
         },
 
         extension: {
-            type: String
+            type: String,
+            default: null
         },
 
         size: {
-            type: Number
-        }
+            type: Number,
+            default: 0
+        },
+
+           width: {
+            type: Number,
+            default: null,
+        },
+
+        height: {
+            type: Number,
+            default: null,
+        },
+
+        // Audio/video duration
+        duration: {
+            type: Number,
+            default: null,
+        },
+
+        // Optional thumbnail
+        thumbnailUrl: {
+            type: String,
+            default: null,
+        },
     },
     {
         _id: false
@@ -107,7 +133,7 @@ const messageSchema = new Schema(
             default: "text"
         },
 
-        attachment: {
+        attachments: {
             type: [attachmentSchema],
             default: []
         },

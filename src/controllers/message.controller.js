@@ -4,6 +4,7 @@ import { ApiError } from "../utils/ApiError.js"
 import { ApiResponse } from "../utils/ApiResponse.js"
 import mongoose from "mongoose"
 import { Conversation } from "../models/converstion.model.js"
+import { uploadOnCloudinary } from "../utils/cloudinary.js"
 
 const getMessages = asyncHandler(async (req, res) => {
 
@@ -267,7 +268,6 @@ const markMessageAsRead = asyncHandler(async (req, res) => {
     );
 });
 
-
 const markMessageAsDelivered = asyncHandler(async (req, res) => {
     const { messageId } = req.params;
     const userId = req.user?._id;
@@ -325,10 +325,51 @@ const markMessageAsDelivered = asyncHandler(async (req, res) => {
     );
 });
 
+const uploadChatFile = asyncHandler(async (req, res) => {
+    if(req.file) {
+        throw new ApiError(400, "PLease select a file");
+    }
+
+    const file = req?.file;
+
+    const cloudinaryResponse = await uploadOnCloudinary(file);
+
+    if(!cloudinaryResponse) {
+        throw new ApiError(500, "Failed to upload file to cloudinary");
+    }
+
+    const originalName = file.originalName;
+
+    const extension = originalName.includes(".") ? originalName.split(".").pop().tolowerCase() : "";
+
+    const fileData = {
+        url: cloudinaryResponse.secure_url,
+
+        public_id: cloudinaryResponse.public_id,
+
+        fileName: cloudinaryResponse.original_filename || originalName,
+
+        originalName,
+
+        mimeType: file.mimeType,
+
+        size: file.size,
+
+        resourceType: cloudinaryResponse.resource_type,
+
+        formet: cloudinaryResponse.formet,
+    };
+
+    return res.status(200).json(
+        new ApiResponse(200, fileData, "File uploaded successfully")
+    )
+})
+
 export {
     markMessageAsRead,
     markMessageAsDelivered,
     getMessages,
     editMessage,
-    deleteMessage
+    deleteMessage,
+    uploadChatFile
 };
