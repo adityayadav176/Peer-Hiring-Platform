@@ -20,20 +20,11 @@ export const initializeSocket = (io) => {
 
     const onlineUsers = new Map();
 
-    /*
-        Example:
-
-        {
-            "userId1" => Set(["socketId1"]),
-            "userId2" => Set(["socketId2", "socketId3"])
-        }
-    */
-
     // ==========================================
     // CONNECTION
     // ==========================================
 
-    io.on("connection", (socket) => {
+    io.on("connection", async (socket) => {
         console.log("====================================");
         console.log("User connected:", socket.id);
 
@@ -42,6 +33,10 @@ export const initializeSocket = (io) => {
         // ==========================================
 
         const userId = socket.user._id.toString();
+
+        // IMPORTANT:
+        // Used by typing_start / typing_stop
+        socket.userId = userId;
 
         console.log("User ID:", userId);
 
@@ -86,7 +81,7 @@ export const initializeSocket = (io) => {
 
         if (isFirstConnection) {
             try {
-                awaitUserOnline(userId);
+                await awaitUserOnline(userId);
             } catch (error) {
                 console.error(
                     "Failed to update online status:",
@@ -105,7 +100,7 @@ export const initializeSocket = (io) => {
 
         // ==========================================
         // TELL OTHER USERS THIS USER IS ONLINE
-        // ONLY ON FIRST CONNECTION
+        // ONLY FIRST CONNECTION
         // ==========================================
 
         if (isFirstConnection) {
@@ -407,6 +402,7 @@ export const initializeSocket = (io) => {
 
                     // ==================================
                     // POPULATE SENDER
+                    // IMPORTANT FOR AVATAR
                     // ==================================
 
                     const populatedMessage =
@@ -414,7 +410,7 @@ export const initializeSocket = (io) => {
                             message._id
                         ).populate(
                             "sender",
-                            "name username profileImage"
+                            "name username email avatar avatarUrl profileImage profilePicture photo"
                         );
 
                     // ==================================
@@ -461,10 +457,6 @@ export const initializeSocket = (io) => {
                 try {
                     const { messageId } =
                         data || {};
-
-                    // ==================================
-                    // VALIDATE
-                    // ==================================
 
                     if (!messageId) {
                         return socket.emit(
@@ -652,10 +644,6 @@ export const initializeSocket = (io) => {
                     const { messageId } =
                         data || {};
 
-                    // ==================================
-                    // VALIDATE
-                    // ==================================
-
                     if (!messageId) {
                         return socket.emit(
                             "message_error",
@@ -832,379 +820,447 @@ export const initializeSocket = (io) => {
         );
 
         // ==========================================
-        // typing indigator 
+        // TYPING START
         // ==========================================
 
-        socket.on("typing_start", ({ conversationId, receiverId, conversationType }) => {
-            if (!conversationId) return;
-
-            const typingData = {
+        socket.on(
+            "typing_start",
+            ({
                 conversationId,
-                userId: socket.userId,
-                userName: socket.user?.name || "Someone",
-                isTyping: true,
-            };
-
-            if (conversationType === "group") {
-                socket.to(`conversation:${conversationId}`).emit(
-                    "user_typing",
-                    typingData
-                );
-            } else if (receiverId) {
-                io.to(receiverId).emit("user_typing", typingData);
-            }
-        });
-
-        socket.on("typing_stop", ({ conversationId, receiverId, conversationType }) => {
-            if (!conversationId) return;
-
-            const typingData = {
-                conversationId,
-                userId: socket.userId,
-                userName: socket.user?.name || "Someone",
-                isTyping: false,
-            };
-
-            if (conversationType === "group") {
-                socket.to(`conversation:${conversationId}`).emit(
-                    "user_typing",
-                    typingData
-                );
-            } else if (receiverId) {
-                io.to(receiverId).emit("user_typing", typingData);
-            }
-        });
-
-// ==========================================
-// EDIT MESSAGE
-// ==========================================
-
-socket.on(
-    "edit_message",
-    async (data) => {
-        try {
-            const { messageId, content } = data || {};
-
-            // ==================================
-            // VALIDATE MESSAGE ID
-            // ==================================
-
-            if (!messageId) {
-                return socket.emit("message_error", {
-                    success: false,
-                    message: "Message ID is required",
-                });
-            }
-
-            if (
-                !mongoose.Types.ObjectId.isValid(messageId)
-            ) {
-                return socket.emit("message_error", {
-                    success: false,
-                    message: "Invalid message ID",
-                });
-            }
-
-            // ==================================
-            // VALIDATE CONTENT
-            // ==================================
-
-            if (!content || !content.trim()) {
-                return socket.emit("message_error", {
-                    success: false,
-                    message: "Message content is required",
-                });
-            }
-
-            // ==================================
-            // GET CURRENT USER
-            // ==================================
-
-            const currentUserId = socket.user?._id;
-
-            console.log(
-                "Current User ID:",
-                currentUserId
-            );
-
-            if (!currentUserId) {
-                return socket.emit("message_error", {
-                    success: false,
-                    message:
-                        "Authenticated user ID not found",
-                });
-            }
-
-            // ==================================
-            // FIND MESSAGE
-            // ==================================
-
-            const message =
-                await Message.findById(messageId);
-
-            console.log(
-                "Message found:",
-                message
-            );
-
-            if (!message) {
-                return socket.emit("message_error", {
-                    success: false,
-                    message: "Message not found",
-                });
-            }
-
-            // ==================================
-            // CHECK MESSAGE SENDER
-            // ==================================
-
-            console.log(
-                "Message sender:",
-                message.sender
-            );
-
-            if (!message.sender) {
-                return socket.emit("message_error", {
-                    success: false,
-                    message:
-                        "Message sender is missing",
-                });
-            }
-
-            // ==================================
-            // ONLY SENDER CAN EDIT
-            // ==================================
-
-            if (
-                String(message.sender) !==
-                String(currentUserId)
-            ) {
-                return socket.emit("message_error", {
-                    success: false,
-                    message:
-                        "You can only edit your own messages",
-                });
-            }
-
-            // ==================================
-            // CHECK DELETED MESSAGE
-            // ==================================
-
-            if (message.isDeleted) {
-                return socket.emit("message_error", {
-                    success: false,
-                    message:
-                        "Deleted message cannot be edited",
-                });
-            }
-
-            // ==================================
-            // CHECK CONVERSATION ID
-            // ==================================
-
-            console.log(
-                "Message conversation:",
-                message.conversation
-            );
-
-            if (!message.conversation) {
-                return socket.emit("message_error", {
-                    success: false,
-                    message:
-                        "Message conversation is missing",
-                });
-            }
-
-            // ==================================
-            // FIND CONVERSATION
-            // ==================================
-
-            const conversation =
-                await Conversation.findById(
-                    message.conversation
-                );
-
-            console.log(
-                "Conversation found:",
-                conversation
-            );
-
-            if (!conversation) {
-                return socket.emit("message_error", {
-                    success: false,
-                    message:
-                        "Conversation not found",
-                });
-            }
-
-            // ==================================
-            // CHECK CONVERSATION DELETED
-            // ==================================
-
-            if (conversation.isDeleted) {
-                return socket.emit("message_error", {
-                    success: false,
-                    message:
-                        "Conversation is deleted",
-                });
-            }
-
-            // ==================================
-            // CHECK PARTICIPANT
-            // ==================================
-
-            const isParticipant =
-                conversation.participants?.some(
-                    (participantId) =>
-                        participantId &&
-                        String(participantId) ===
-                            String(currentUserId)
-                );
-
-            if (!isParticipant) {
-                return socket.emit("message_error", {
-                    success: false,
-                    message:
-                        "You are not a participant of this conversation",
-                });
-            }
-
-            // ==================================
-            // UPDATE MESSAGE
-            // ==================================
-
-            message.content = content.trim();
-
-            message.isEdited = true;
-
-            message.editedAt = new Date();
-
-            await message.save();
-
-            console.log(
-                "Message updated successfully:",
-                message._id
-            );
-
-            // ==================================
-            // CONVERSATION ROOM
-            // ==================================
-
-            const conversationRoom =
-                String(message.conversation);
-
-            // ==================================
-            // REAL-TIME UPDATE
-            // ==================================
-
-            io.to(conversationRoom).emit(
-                "message_edited",
-                {
-                    success: true,
-
-                    messageId:
-                        String(message._id),
-
-                    conversationId:
-                        conversationRoom,
-
-                    content:
-                        message.content,
-
-                    isEdited:
-                        message.isEdited,
-
-                    editedAt:
-                        message.editedAt,
+                receiverId,
+                conversationType,
+            }) => {
+                if (!conversationId) {
+                    return;
                 }
-            );
 
-            console.log(
-                `Message ${messageId} edited successfully`
-            );
+                const typingData = {
+                    conversationId,
+                    userId: socket.userId,
+                    userName:
+                        socket.user?.name ||
+                        "Someone",
+                    isTyping: true,
+                };
 
-            console.log("====================================");
-
-        } catch (error) {
-            console.error(
-                "===================================="
-            );
-
-            console.error(
-                "EDIT MESSAGE ERROR:"
-            );
-
-            console.error(
-                error.message
-            );
-
-            console.error(
-                error.stack
-            );
-
-            console.error(
-                "===================================="
-            );
-
-            socket.emit("message_error", {
-                success: false,
-                message: error.message,
-            });
-        }
-    }
-);
+                if (
+                    conversationType ===
+                    "group"
+                ) {
+                    socket
+                        .to(
+                            `conversation:${conversationId}`
+                        )
+                        .emit(
+                            "user_typing",
+                            typingData
+                        );
+                } else if (receiverId) {
+                    io.to(receiverId).emit(
+                        "user_typing",
+                        typingData
+                    );
+                }
+            }
+        );
 
         // ==========================================
-        // delete message
+        // TYPING STOP
         // ==========================================
 
-        socket.on("delete_message", async ({ messageId }) => {
-    try {
-        if (!messageId) {
-            socket.emit("message_error", {
-                message: "Message ID is required",
-            });
-            return;
-        }
+        socket.on(
+            "typing_stop",
+            ({
+                conversationId,
+                receiverId,
+                conversationType,
+            }) => {
+                if (!conversationId) {
+                    return;
+                }
 
-        const message = await Message.findById(messageId);
+                const typingData = {
+                    conversationId,
+                    userId: socket.userId,
+                    userName:
+                        socket.user?.name ||
+                        "Someone",
+                    isTyping: false,
+                };
 
-        if (!message) {
-            socket.emit("message_error", {
-                message: "Message not found",
-            });
-            return;
-        }
+                if (
+                    conversationType ===
+                    "group"
+                ) {
+                    socket
+                        .to(
+                            `conversation:${conversationId}`
+                        )
+                        .emit(
+                            "user_typing",
+                            typingData
+                        );
+                } else if (receiverId) {
+                    io.to(receiverId).emit(
+                        "user_typing",
+                        typingData
+                    );
+                }
+            }
+        );
 
-        // Only sender can delete their message
-        if (message.sender.toString() !== socket.user._id.toString()) {
-            socket.emit("message_error", {
-                message: "You can only delete your own message",
-            });
-            retu
-        }
+        // ==========================================
+        // EDIT MESSAGE
+        // ==========================================
 
-        // Soft delete
-        message.isDeleted = true;
-        message.deletedAt = new Date();
-        message.content = "";
+        socket.on(
+            "edit_message",
+            async (data) => {
+                try {
+                    const {
+                        messageId,
+                        content,
+                    } = data || {};
 
-        await message.save();
+                    if (!messageId) {
+                        return socket.emit(
+                            "message_error",
+                            {
+                                success: false,
+                                message:
+                                    "Message ID is required",
+                            }
+                        );
+                    }
 
-        // Send updated message to everyone in conversation
-        io.to(message.conversation.toString()).emit("message_deleted", {
-            messageId: message._id,
-            conversationId: message.conversation,
-        });
+                    if (
+                        !mongoose.Types.ObjectId.isValid(
+                            messageId
+                        )
+                    ) {
+                        return socket.emit(
+                            "message_error",
+                            {
+                                success: false,
+                                message:
+                                    "Invalid message ID",
+                            }
+                        );
+                    }
 
-    } catch (error) {
-        console.error("delete_message error:", error);
+                    if (
+                        !content ||
+                        !content.trim()
+                    ) {
+                        return socket.emit(
+                            "message_error",
+                            {
+                                success: false,
+                                message:
+                                    "Message content is required",
+                            }
+                        );
+                    }
 
-        socket.emit("message_error", {
-            message: "Failed to delete message",
-        });
-    }
-        });
+                    const currentUserId =
+                        socket.user?._id;
+
+                    if (!currentUserId) {
+                        return socket.emit(
+                            "message_error",
+                            {
+                                success: false,
+                                message:
+                                    "Authenticated user ID not found",
+                            }
+                        );
+                    }
+
+                    const message =
+                        await Message.findById(
+                            messageId
+                        );
+
+                    if (!message) {
+                        return socket.emit(
+                            "message_error",
+                            {
+                                success: false,
+                                message:
+                                    "Message not found",
+                            }
+                        );
+                    }
+
+                    // ==================================
+                    // ONLY SENDER CAN EDIT
+                    // ==================================
+
+                    if (
+                        String(message.sender) !==
+                        String(currentUserId)
+                    ) {
+                        return socket.emit(
+                            "message_error",
+                            {
+                                success: false,
+                                message:
+                                    "You can only edit your own messages",
+                            }
+                        );
+                    }
+
+                    // ==================================
+                    // CHECK DELETED
+                    // ==================================
+
+                    if (message.isDeleted) {
+                        return socket.emit(
+                            "message_error",
+                            {
+                                success: false,
+                                message:
+                                    "Deleted message cannot be edited",
+                            }
+                        );
+                    }
+
+                    if (!message.conversation) {
+                        return socket.emit(
+                            "message_error",
+                            {
+                                success: false,
+                                message:
+                                    "Message conversation is missing",
+                            }
+                        );
+                    }
+
+                    const conversation =
+                        await Conversation.findById(
+                            message.conversation
+                        );
+
+                    if (!conversation) {
+                        return socket.emit(
+                            "message_error",
+                            {
+                                success: false,
+                                message:
+                                    "Conversation not found",
+                            }
+                        );
+                    }
+
+                    if (conversation.isDeleted) {
+                        return socket.emit(
+                            "message_error",
+                            {
+                                success: false,
+                                message:
+                                    "Conversation is deleted",
+                            }
+                        );
+                    }
+
+                    // ==================================
+                    // CHECK PARTICIPANT
+                    // ==================================
+
+                    const isParticipant =
+                        conversation.participants?.some(
+                            (participantId) =>
+                                participantId &&
+                                String(
+                                    participantId
+                                ) ===
+                                    String(
+                                        currentUserId
+                                    )
+                        );
+
+                    if (!isParticipant) {
+                        return socket.emit(
+                            "message_error",
+                            {
+                                success: false,
+                                message:
+                                    "You are not a participant of this conversation",
+                            }
+                        );
+                    }
+
+                    // ==================================
+                    // UPDATE MESSAGE
+                    // ==================================
+
+                    message.content =
+                        content.trim();
+
+                    message.isEdited = true;
+
+                    message.editedAt =
+                        new Date();
+
+                    await message.save();
+
+                    // ==================================
+                    // CONVERSATION ROOM
+                    // ==================================
+
+                    const conversationRoom =
+                        String(
+                            message.conversation
+                        );
+
+                    // ==================================
+                    // REAL-TIME UPDATE
+                    // ==================================
+
+                    io.to(
+                        conversationRoom
+                    ).emit(
+                        "message_edited",
+                        {
+                            success: true,
+
+                            messageId:
+                                String(
+                                    message._id
+                                ),
+
+                            conversationId:
+                                conversationRoom,
+
+                            content:
+                                message.content,
+
+                            isEdited:
+                                message.isEdited,
+
+                            editedAt:
+                                message.editedAt,
+                        }
+                    );
+                } catch (error) {
+                    console.error(
+                        "EDIT MESSAGE ERROR:",
+                        error.message
+                    );
+
+                    socket.emit(
+                        "message_error",
+                        {
+                            success: false,
+                            message:
+                                error.message,
+                        }
+                    );
+                }
+            }
+        );
+
+        // ==========================================
+        // DELETE MESSAGE
+        // ==========================================
+
+        socket.on(
+            "delete_message",
+            async ({ messageId }) => {
+                try {
+                    if (!messageId) {
+                        socket.emit(
+                            "message_error",
+                            {
+                                message:
+                                    "Message ID is required",
+                            }
+                        );
+
+                        return;
+                    }
+
+                    const message =
+                        await Message.findById(
+                            messageId
+                        );
+
+                    if (!message) {
+                        socket.emit(
+                            "message_error",
+                            {
+                                message:
+                                    "Message not found",
+                            }
+                        );
+
+                        return;
+                    }
+
+                    // ==================================
+                    // ONLY SENDER CAN DELETE
+                    // ==================================
+
+                    if (
+                        message.sender.toString() !==
+                        socket.user._id.toString()
+                    ) {
+                        socket.emit(
+                            "message_error",
+                            {
+                                message:
+                                    "You can only delete your own message",
+                            }
+                        );
+
+                        return;
+                    }
+
+                    // ==================================
+                    // SOFT DELETE
+                    // ==================================
+
+                    message.isDeleted = true;
+
+                    message.deletedAt =
+                        new Date();
+
+                    message.content = "";
+
+                    await message.save();
+
+                    // ==================================
+                    // REAL-TIME UPDATE
+                    // ==================================
+
+                    io.to(
+                        message.conversation.toString()
+                    ).emit(
+                        "message_deleted",
+                        {
+                            messageId:
+                                message._id,
+
+                            conversationId:
+                                message.conversation,
+                        }
+                    );
+                } catch (error) {
+                    console.error(
+                        "delete_message error:",
+                        error
+                    );
+
+                    socket.emit(
+                        "message_error",
+                        {
+                            message:
+                                "Failed to delete message",
+                        }
+                    );
+                }
+            }
+        );
 
         // ==========================================
         // DISCONNECT
@@ -1225,7 +1281,9 @@ socket.on(
                     );
 
                     const userSockets =
-                        onlineUsers.get(userId);
+                        onlineUsers.get(
+                            userId
+                        );
 
                     if (!userSockets) {
                         return;
@@ -1235,13 +1293,17 @@ socket.on(
                     // REMOVE CURRENT SOCKET
                     // ==================================
 
-                    userSockets.delete(socket.id);
+                    userSockets.delete(
+                        socket.id
+                    );
 
                     // ==================================
                     // USER STILL HAS ANOTHER SOCKET
                     // ==================================
 
-                    if (userSockets.size > 0) {
+                    if (
+                        userSockets.size > 0
+                    ) {
                         console.log(
                             `User ${userId} still has ${userSockets.size} active socket(s)`
                         );
@@ -1253,7 +1315,9 @@ socket.on(
                     // USER COMPLETELY OFFLINE
                     // ==================================
 
-                    onlineUsers.delete(userId);
+                    onlineUsers.delete(
+                        userId
+                    );
 
                     const lastSeen =
                         new Date();
