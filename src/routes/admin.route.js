@@ -13,6 +13,7 @@ import {
     getUserById,
     rejectCompany,
     unblockUser,
+    updateUserStatus,
     verifyCompany
 } from "../controllers/admin.controller.js";
 
@@ -57,6 +58,12 @@ router.delete(
     "/users/:userId/delete",
     adminAuth,
     deleteUser
+)
+
+router.patch(
+    "/users/:userId/status",
+    adminAuth,
+    updateUserStatus
 )
 // ADMIN COMPANIES
 

@@ -738,6 +738,66 @@ const blockCompany = asyncHandler(async (req, res) => {
     );
 });
 
+const updateUserStatus = asyncHandler(async (req, res) => {
+
+    const { userId } = req.params;
+    const { status } = req.body;
+
+    // Validate user ID
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+        throw new ApiError(400, "Invalid user ID");
+    }
+
+    // Validate status
+    if (!["active", "blocked"].includes(status)) {
+        throw new ApiError(
+            400,
+            "Status must be either active or blocked"
+        );
+    }
+
+    // Find user
+    const user = await User.findById(userId);
+
+    if (!user) {
+        throw new ApiError(404, "User not found");
+    }
+
+    // Check if status is already the same
+    if (user.status === status) {
+        throw new ApiError(
+            400,
+            `User is already ${status}`
+        );
+    }
+
+    // Update status
+    user.status = status;
+
+    // If suspending the user, invalidate existing tokens
+    if (status === "blocked") {
+        user.tokenVersion += 1;
+        user.isOnline = false;
+        user.lastSeen = new Date();
+        user.lastSeenAt = new Date();
+    }
+
+    await user.save();
+
+    return res
+        .status(200)
+        .json(
+            new ApiResponse(
+                200,
+                {
+                    userId: user._id,
+                    status: user.status
+                },
+                "User status updated successfully"
+            )
+        );
+});
+
 export {
     getAdminDashboardStats,
     getAllUsers,
@@ -749,5 +809,6 @@ export {
     getUserById,
     blockUser,
     unblockUser,
-    deleteUser
+    deleteUser,
+    updateUserStatus
 };
