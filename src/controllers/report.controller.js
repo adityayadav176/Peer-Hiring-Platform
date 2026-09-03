@@ -91,10 +91,49 @@ const getReportById = asyncHandler(async (req, res) => {
     );
 });
 
+const resolveReport = asyncHandler(async (req, res) => {
+
+    const { reportId } = req.params;
+    const { adminNote = "" } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(reportId)) {
+        throw new ApiError(400, "Invalid report ID");
+    }
+
+    const report = await Report.findById(reportId);
+
+    if (!report) {
+        throw new ApiError(404, "Report not found");
+    }
+
+    if (report.status !== "pending") {
+        throw new ApiError(
+            400,
+            `Report is already ${report.status}`
+        );
+    }
+
+    report.status = "resolved";
+    report.adminNote = adminNote;
+    report.resolvedBy = req.user._id;
+    report.resolvedAt = new Date();
+
+    await report.save();
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            report,
+            "Report resolved successfully"
+        )
+    );
+});
+
 
 
 
 export {
     getAllReports,
-    getReportById
+    getReportById,
+    resolveReport
 }
