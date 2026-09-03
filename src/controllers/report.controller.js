@@ -2,6 +2,7 @@ import { Report } from "../models/report.model.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
+import {Job} from "../models/job.model.js"
 import mongoose from "mongoose";
 
 
@@ -168,10 +169,105 @@ const rejectReport = asyncHandler(async (req, res) => {
     );
 });
 
+const createReport = asyncHandler(async (req, res) => {
 
+    const { reportedUser, reportedJob, reason, description } = req.body;
+
+    // At least one target is required
+    if (!reportedUser && !reportedJob) {
+        throw new ApiError(
+            400,
+            "You must report a user or a job"
+        );
+    }
+
+    // Both cannot be reported in one report
+    if (reportedUser && reportedJob) {
+        throw new ApiError(
+            400,
+            "You can report either a user or a job"
+        );
+    }
+
+    if (!reason?.trim()) {
+        throw new ApiError(400, "Report reason is required");
+    }
+
+    // Validate reported user ID
+    if (
+        reportedUser &&
+        !mongoose.Types.ObjectId.isValid(reportedUser)
+    ) {
+        throw new ApiError(400, "Invalid reported user ID");
+    }
+
+    // Validate reported job ID
+    if (
+        reportedJob &&
+        !mongoose.Types.ObjectId.isValid(reportedJob)
+    ) {
+        throw new ApiError(400, "Invalid reported job ID");
+    }
+
+    // User cannot report himself
+    if (
+        reportedUser &&
+        reportedUser.toString() === req.user._id.toString()
+    ) {
+        throw new ApiError(
+            400,
+            "You cannot report yourself"
+        );
+    }
+
+    // Check reported user exists
+    if (reportedUser) {
+        const user = await User.findById(reportedUser);
+
+        if (!user) {
+            throw new ApiError(
+                404,
+                "Reported user not found"
+            );
+        }
+    }
+
+    // Check reported job exists
+    if (reportedJob) {
+        const job = await Job.findById(reportedJob);
+
+        if (!job) {
+            throw new ApiError(
+                404,
+                "Reported job not found"
+            );
+        }
+    }
+
+    // Create report
+    const report = await Report.create({
+        reporter: req.user._id,
+        reportedUser: reportedUser || null,
+        reportedJob: reportedJob || null,
+        reason: reason.trim(),
+        description: description?.trim() || "",
+        status: "pending"
+    });
+
+    return res
+        .status(201)
+        .json(
+            new ApiResponse(
+                201,
+                report,
+                "Report submitted successfully"
+            )
+        );
+});
 export {
     getAllReports,
     getReportById,
     resolveReport,
-    rejectReport
+    rejectReport,
+    createReport
 }

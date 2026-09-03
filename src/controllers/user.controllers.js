@@ -41,156 +41,156 @@ const client = new OAuth2Client(
 )
 
 const registerUser = asyncHandler(async (req, res) => {
-        const {
-            name,
-            email,
-            password,
-            phoneNo
-        } = req.body;
+    const {
+        name,
+        email,
+        password,
+        phoneNo
+    } = req.body;
 
-        // ==============================
-        // VALIDATION
-        // ==============================
+    // ==============================
+    // VALIDATION
+    // ==============================
 
-        if (
-            !name?.trim() ||
-            !email?.trim() ||
-            !password?.trim() ||
-            !phoneNo?.trim()
-        ) {
-            throw new ApiError(
-                400,
-                "All fields are required."
-            );
-        }
+    if (
+        !name?.trim() ||
+        !email?.trim() ||
+        !password?.trim() ||
+        !phoneNo?.trim()
+    ) {
+        throw new ApiError(
+            400,
+            "All fields are required."
+        );
+    }
 
-        const normalizedEmail =
-            email.trim().toLowerCase();
+    const normalizedEmail =
+        email.trim().toLowerCase();
 
-        const normalizedPhone =
-            phoneNo.trim();
+    const normalizedPhone =
+        phoneNo.trim();
 
-        if (password.length < 8) {
-            throw new ApiError(
-                400,
-                "Password must be at least 8 characters."
-            );
-        }
+    if (password.length < 8) {
+        throw new ApiError(
+            400,
+            "Password must be at least 8 characters."
+        );
+    }
 
-        // ==============================
-        // CHECK EXISTING USER
-        // ==============================
+    // ==============================
+    // CHECK EXISTING USER
+    // ==============================
 
-        const existedUser = await User.findOne({
-            $or: [
-                {
-                    email: normalizedEmail
-                },
-                {
-                    phoneNo: normalizedPhone
-                }
-            ]
-        });
-
-        if (existedUser) {
-            throw new ApiError(
-                409,
-                "User already exists."
-            );
-        }
-
-        // ==============================
-        // GET FILES
-        // ==============================
-
-        const avatarLocalPath =
-            req.files?.avatar?.[0]?.path;
-
-        const coverLocalPath =
-            req.files?.coverImage?.[0]?.path;
-
-        if (!avatarLocalPath) {
-            throw new ApiError(
-                400,
-                "Avatar is required."
-            );
-        }
-
-        if (!coverLocalPath) {
-            throw new ApiError(
-                400,
-                "Cover image is required."
-            );
-        }
-
-        // ==============================
-        // UPLOAD TO CLOUDINARY
-        // ==============================
-
-        const avatarUpload =  await uploadOnCloudinary(avatarLocalPath);
-      const coverUpload = await uploadOnCloudinary(coverLocalPath);
-
-        if (
-            !avatarUpload?.secure_url ||
-            !avatarUpload?.public_id
-        ) {
-            throw new ApiError(
-                500,
-                "Failed to upload avatar."
-            );
-        }
-
-        if (
-            !coverUpload?.secure_url ||
-            !coverUpload?.public_id
-        ) {
-            throw new ApiError(
-                500,
-                "Failed to upload cover image."
-            );
-        }
-
-        // ==============================
-        // CREATE USER
-        // ==============================
-
-        const user = await User.create({
-            name: name.trim(),
-
-            email: normalizedEmail,
-
-            password,
-
-            phoneNo: normalizedPhone,
-
-            avatar: {
-                url: avatarUpload.secure_url,
-
-                public_id: avatarUpload.public_id
+    const existedUser = await User.findOne({
+        $or: [
+            {
+                email: normalizedEmail
             },
-
-            coverImage: {
-                url: coverUpload.secure_url,
-
-                public_id: coverUpload.public_id
+            {
+                phoneNo: normalizedPhone
             }
-        });
+        ]
+    });
 
-        // ==============================
-        // SEND WELCOME EMAIL
-        // ==============================
+    if (existedUser) {
+        throw new ApiError(
+            409,
+            "User already exists."
+        );
+    }
 
-       await transporter
-            .sendMail({
-                from:
-                    process.env.SENDER_EMAIL,
+    // ==============================
+    // GET FILES
+    // ==============================
 
-                to: normalizedEmail,
+    const avatarLocalPath =
+        req.files?.avatar?.[0]?.path;
 
-                subject:
-                    `Welcome To ${PROJECT_NAME}`,
+    const coverLocalPath =
+        req.files?.coverImage?.[0]?.path;
 
-                html: `
+    if (!avatarLocalPath) {
+        throw new ApiError(
+            400,
+            "Avatar is required."
+        );
+    }
+
+    if (!coverLocalPath) {
+        throw new ApiError(
+            400,
+            "Cover image is required."
+        );
+    }
+
+    // ==============================
+    // UPLOAD TO CLOUDINARY
+    // ==============================
+
+    const avatarUpload = await uploadOnCloudinary(avatarLocalPath);
+    const coverUpload = await uploadOnCloudinary(coverLocalPath);
+
+    if (
+        !avatarUpload?.secure_url ||
+        !avatarUpload?.public_id
+    ) {
+        throw new ApiError(
+            500,
+            "Failed to upload avatar."
+        );
+    }
+
+    if (
+        !coverUpload?.secure_url ||
+        !coverUpload?.public_id
+    ) {
+        throw new ApiError(
+            500,
+            "Failed to upload cover image."
+        );
+    }
+
+    // ==============================
+    // CREATE USER
+    // ==============================
+
+    const user = await User.create({
+        name: name.trim(),
+
+        email: normalizedEmail,
+
+        password,
+
+        phoneNo: normalizedPhone,
+
+        avatar: {
+            url: avatarUpload.secure_url,
+
+            public_id: avatarUpload.public_id
+        },
+
+        coverImage: {
+            url: coverUpload.secure_url,
+
+            public_id: coverUpload.public_id
+        }
+    });
+
+    // ==============================
+    // SEND WELCOME EMAIL
+    // ==============================
+
+    await transporter
+        .sendMail({
+            from:
+                process.env.SENDER_EMAIL,
+
+            to: normalizedEmail,
+
+            subject:
+                `Welcome To ${PROJECT_NAME}`,
+
+            html: `
                     <div
                         style="
                             font-family: Arial, sans-serif;
@@ -215,65 +215,70 @@ const registerUser = asyncHandler(async (req, res) => {
 
                     </div>
                 `
-            })
-            .catch((error) => {
-                console.error(
-                    "Email Error:",
-                    error.message
-                );
-            });
-
-        // ==============================
-        // FETCH SAFE USER
-        // ==============================
-
-        const createdUser =
-            await User.findById(user._id)
-                .select(
-                    "-password -refreshToken"
-                );
-
-        // ==============================
-        // RESPONSE
-        // ==============================
-
-        return res
-            .status(201)
-            .json(
-                new ApiResponse(
-                    201,
-                    {
-                        user: createdUser
-                    },
-                    "User registered successfully."
-                )
+        })
+        .catch((error) => {
+            console.error(
+                "Email Error:",
+                error.message
             );
+        });
+
+    // ==============================
+    // FETCH SAFE USER
+    // ==============================
+
+    const createdUser =
+        await User.findById(user._id)
+            .select(
+                "-password -refreshToken"
+            );
+
+    // ==============================
+    // RESPONSE
+    // ==============================
+
+    return res
+        .status(201)
+        .json(
+            new ApiResponse(
+                201,
+                {
+                    user: createdUser
+                },
+                "User registered successfully."
+            )
+        );
 });
 
 const loginUser = asyncHandler(async (req, res) => {
     const { email, phoneNo, password } = req.body;
+
     const ipAddress = req.ip;
 
     if ((!email && !phoneNo) || !password) {
-        throw new ApiError(400, "All Fields Are Required");
+        throw new ApiError(
+            400,
+            "Email or phone number and password are required"
+        );
     }
 
     const normalizedEmail = email?.toLowerCase().trim();
-    console.log("LOGIN EMAIL:", normalizedEmail);
-    // =========================================================
-    // ADMIN LOGIN
-    // =========================================================
+    const normalizedPhone = phoneNo?.trim();
+
+
+    // Only check Admin collection when email is provided.
+    // If the email does not belong to an admin,
+    // continue normally to User login.
 
     if (normalizedEmail) {
         const admin = await Admin.findOne({
-            email: normalizedEmail,
+            email: normalizedEmail
         }).select("+password");
 
-        if (!admin) {
-            throw new ApiError(400, "Admin not found");
-        }
-
+        // Admin exists
         if (admin) {
+
+            // Check admin active status
             if (!admin.isActive) {
                 throw new ApiError(
                     403,
@@ -281,6 +286,7 @@ const loginUser = asyncHandler(async (req, res) => {
                 );
             }
 
+            // Check password
             const isPasswordCorrect = await bcrypt.compare(
                 password,
                 admin.password
@@ -288,8 +294,8 @@ const loginUser = asyncHandler(async (req, res) => {
 
             if (!isPasswordCorrect) {
                 throw new ApiError(
-                    400,
-                    "Invalid Credentials"
+                    401,
+                    "Invalid email or password"
                 );
             }
 
@@ -297,217 +303,200 @@ const loginUser = asyncHandler(async (req, res) => {
             admin.lastLoginAt = new Date();
 
             await admin.save({
-                validateBeforeSave: false,
+                validateBeforeSave: false
             });
 
-            // Generate Admin Access Token
             const accessToken = JWT.sign(
                 {
                     adminId: admin._id,
-                    type: "admin",
+                    type: "admin"
                 },
                 process.env.ACCESS_TOKEN_SECRET,
                 {
-                    expiresIn: "15m",
+                    expiresIn: "15m"
                 }
             );
 
-            // Generate Admin Refresh Token
             const refreshToken = JWT.sign(
                 {
                     adminId: admin._id,
-                    type: "admin",
+                    type: "admin"
                 },
                 process.env.REFRESH_TOKEN_SECRET,
                 {
-                    expiresIn: "7d",
+                    expiresIn: "7d"
                 }
             );
 
-            const loggedInAdmin = {
-                _id: admin._id,
-                name: admin.name,
-                email: admin.email,
-                type: "admin",
-            };
-
-            const accessCookieOption = {
+            const cookieOptions = {
                 httpOnly: true,
                 secure: process.env.NODE_ENV === "production",
-                sameSite: "strict",
-                maxAge: 15 * 60 * 1000,
+                sameSite:
+                    process.env.NODE_ENV === "production"
+                        ? "none"
+                        : "lax"
             };
 
-            const refreshCookieOption = {
-                httpOnly: true,
-                secure: process.env.NODE_ENV === "production",
-                sameSite: "strict",
-                maxAge: 7 * 24 * 60 * 60 * 1000,
-            };
+            res.cookie(
+                "accessToken",
+                accessToken,
+                {
+                    ...cookieOptions,
+                    maxAge: 15 * 60 * 1000
+                }
+            );
 
-            return res
-                .status(200)
-                .cookie(
-                    "accessToken",
-                    accessToken,
-                    accessCookieOption
-                )
-                .cookie(
-                    "refreshToken",
-                    refreshToken,
-                    refreshCookieOption
-                )
-                .json(
-                    new ApiResponse(
-                        200,
-                        {
-                            loggedInAdmin,
-                            accessToken,
-                            // type: "admin",
+            res.cookie(
+                "refreshToken",
+                refreshToken,
+                {
+                    ...cookieOptions,
+                    maxAge: 7 * 24 * 60 * 60 * 1000
+                }
+            );
+
+            return res.status(200).json(
+                new ApiResponse(
+                    200,
+                    {
+                        admin: {
+                            _id: admin._id,
+                            name: admin.name,
+                            email: admin.email,
+                            role: admin.role,
+                            isActive: admin.isActive,
+                            lastLoginAt: admin.lastLoginAt
                         },
-                        "Admin Login Successfully"
-                    )
-                );
+                        accessToken,
+                        type: "admin"
+                    },
+                    "Admin logged in successfully"
+                )
+            );
         }
     }
 
-    console.log("ADMIN:", admin);
+    const userQuery = {};
 
-    // =========================================================
-    // USER LOGIN
-    // =========================================================
+    if (normalizedEmail) {
+        userQuery.email = normalizedEmail;
+    } else if (normalizedPhone) {
+        userQuery.phoneNo = normalizedPhone;
+    }
 
-    const user = await User.findOne({
-        $or: [
-            { email: normalizedEmail },
-            { phoneNo },
-        ],
-    });
+    const user = await User.findOne(userQuery).select("+password");
 
     if (!user) {
         throw new ApiError(
             404,
-            "User Not Found"
+            "User not found"
         );
     }
 
     if (!user.password) {
         throw new ApiError(
             400,
-            "This account was created using Google. Please login with Google or set a password."
+            "This account does not have a password. Please use your social login."
         );
     }
 
-    const remainingMinutes = user.lockUntil
-        ? Math.ceil(
-            (user.lockUntil - Date.now()) /
-            (1000 * 60)
-        )
-        : 0;
 
     if (
         user.lockUntil &&
-        user.lockUntil > Date.now()
+        user.lockUntil > new Date()
     ) {
+        const remainingTime = Math.ceil(
+            (user.lockUntil.getTime() - Date.now()) /
+            (60 * 1000)
+        );
+
         throw new ApiError(
-            403,
-            `Account locked. Try again in ${remainingMinutes} minute(s).`
+            423,
+            `Account temporarily locked. Try again after ${remainingTime} minute(s).`
         );
     }
 
     const isPasswordCorrect =
         await user.isPasswordCorrect(password);
 
-    if (!isPasswordCorrect) {
-        user.failedLoginAttempts += 1;
 
+    if (!isPasswordCorrect) {
+
+        user.failedLoginAttempts =
+            (user.failedLoginAttempts || 0) + 1;
+
+
+        // Lock account after 5 failed attempts
         if (user.failedLoginAttempts >= 5) {
-            user.lockUntil =
-                Date.now() +
-                15 * 60 * 1000;
+
+            user.lockUntil = new Date(
+                Date.now() + 15 * 60 * 1000
+            );
+
+            await user.save({
+                validateBeforeSave: false
+            });
+
+            throw new ApiError(
+                423,
+                "Too many failed login attempts. Account locked for 15 minutes."
+            );
         }
 
+
         await user.save({
-            validateBeforeSave: false,
+            validateBeforeSave: false
         });
 
+
+        const attemptsLeft =
+            5 - user.failedLoginAttempts;
+
+
         throw new ApiError(
-            400,
-            "Invalid Credentials"
+            401,
+            `Invalid email or password. ${attemptsLeft} attempt(s) remaining.`
         );
     }
 
-    // =========================================================
-    // 2FA
-    // =========================================================
-
     if (user.twoFactorEnabled) {
+
         return res.status(200).json(
             new ApiResponse(
                 200,
                 {
                     twoFactorRequired: true,
                     userId: user._id,
-                    type: "user",
+                    type: "user"
                 },
-                "2FA required"
+                "Two-factor authentication required"
             )
         );
     }
 
-    // =========================================================
-    // DEVICE INFORMATION
-    // =========================================================
 
-    const {
-        browser = {},
-        os = {},
-        device = {},
-    } = req.deviceInfo || {};
+    const deviceInfo = req.deviceInfo || {};
 
-    // =========================================================
-    // CREATE SESSION
-    // =========================================================
+    const userAgent =
+        req.headers["user-agent"] || "";
 
     const session = await Session.create({
-        userId: user._id,
-        refreshToken: "",
+        user: user._id,
 
-        deviceModel:
-            device.model || "",
-
-        device:
-            device.name ||
-            `${browser.name || "Unknown Browser"} on ${os.name || "Unknown OS"
-            }`,
-
-        deviceType:
-            device.type || "desktop",
-
-        deviceVendor:
-            device.vendor || "",
+        device: deviceInfo.device || "Unknown",
 
         browser:
-            browser.name || "Unknown",
-
-        browserVersion:
-            browser.version || "",
+            deviceInfo.browser || "Unknown",
 
         os:
-            os.name || "Unknown",
-
-        osVersion:
-            os.version || "",
+            deviceInfo.os || "Unknown",
 
         ipAddress,
 
-        userAgent:
-            req.headers["user-agent"] || "",
-    });
+        userAgent,
 
-    // =========================================================
-    // GENERATE USER TOKENS
-    // =========================================================
+        lastActiveAt: new Date()
+    });
 
     const accessToken =
         user.generateAccessToken(
@@ -519,229 +508,156 @@ const loginUser = asyncHandler(async (req, res) => {
             session._id
         );
 
-    // =========================================================
-    // HASH REFRESH TOKEN
-    // =========================================================
-
     const hashedRefreshToken =
         crypto
             .createHash("sha256")
             .update(refreshToken)
             .digest("hex");
 
+
+    // Store hashed refresh token in session
     session.refreshToken =
         hashedRefreshToken;
 
-    await session.save({
-        validateBeforeSave: false,
-    });
+    session.refreshTokenExpiresAt =
+        new Date(
+            Date.now() + 7 * 24 * 60 * 60 * 1000
+        );
 
-    // =========================================================
-    // RESET LOGIN ATTEMPTS
-    // =========================================================
+
+    await session.save();
 
     user.failedLoginAttempts = 0;
+
     user.lockUntil = null;
 
+    user.lastSeenAt = new Date();
+
+    user.isOnline = true;
+
+
     await user.save({
-        validateBeforeSave: false,
+        validateBeforeSave: false
     });
 
-    // =========================================================
-    // SAFE SESSION
-    // =========================================================
-
     const safeSession = {
-        sessionId: session._id,
-
-        deviceName:
-            session.device ||
-            `${session.browser} on ${session.os}`,
-
-        deviceModel:
-            session.deviceModel,
-
-        deviceType:
-            session.deviceType,
-
-        deviceVendor:
-            session.deviceVendor,
-
-        browser:
-            session.browser,
-
-        browserVersion:
-            session.browserVersion,
-
-        os:
-            session.os,
-
-        osVersion:
-            session.osVersion,
-
-        ipAddress:
-            session.ipAddress,
-
-        lastActive:
-            session.lastActive,
-
-        createdAt:
-            session.createdAt,
+        _id: session._id,
+        device: session.device,
+        browser: session.browser,
+        os: session.os,
+        ipAddress: session.ipAddress,
+        createdAt: session.createdAt,
+        lastActiveAt: session.lastActiveAt
     };
 
-    // =========================================================
-    // LOGIN EMAIL
-    // =========================================================
+    try {
 
-    const deviceName =
-        session.device ||
-        `${session.browser || "Unknown Browser"} on ${session.os || "Unknown OS"
-        }`;
-
-    const time =
-        new Date().toISOString();
-
-    await transporter
-        .sendMail({
-            from:
-                process.env.SENDER_EMAIL,
-
-            to:
-                user.email,
-
-            subject:
-                "New Login Detected on Your Account",
-
+        await transporter.sendMail({
+            from: process.env.SMTP_FROM,
+            to: user.email,
+            subject: "New Login Detected",
             html: `
-                <div style="font-family: Arial, sans-serif; background:#f4f4f4; padding:20px;">
-                    <div style="max-width:600px; margin:auto; background:#ffffff; padding:20px; border-radius:10px; border:1px solid #e5e5e5;">
+                <h2>New Login Detected</h2>
 
-                        <h2 style="color:#111;">
-                            🔐 New Login Detected
-                        </h2>
+                <p>Hello ${user.name},</p>
 
-                        <p style="font-size:14px; color:#333;">
-                            Hi <b>${user.name}</b>, we noticed a new login to your account.
-                        </p>
+                <p>
+                    Your Peer Hiring account was just
+                    logged in successfully.
+                </p>
 
-                        <div style="background:#f9f9f9; padding:15px; border-radius:8px; margin-top:15px;">
+                <p>
+                    <strong>IP Address:</strong>
+                    ${ipAddress}
+                </p>
 
-                            <p>
-                                <b>Device:</b> ${deviceName}
-                            </p>
+                <p>
+                    <strong>Device:</strong>
+                    ${deviceInfo.device || "Unknown"}
+                </p>
 
-                            <p>
-                                <b>Browser:</b> ${session.browser ||
-                "Unknown"
-                }
-                            </p>
+                <p>
+                    <strong>Browser:</strong>
+                    ${deviceInfo.browser || "Unknown"}
+                </p>
 
-                            <p>
-                                <b>Operating System:</b> ${session.os ||
-                "Unknown"
-                }
-                            </p>
+                <p>
+                    <strong>Operating System:</strong>
+                    ${deviceInfo.os || "Unknown"}
+                </p>
 
-                            <p>
-                                <b>IP Address:</b> ${session.ipAddress ||
-                req.ip
-                }
-                            </p>
+                <p>
+                    If this wasn't you, please secure
+                    your account immediately.
+                </p>
+            `
+        });
 
-                            <p>
-                                <b>Time:</b> ${time}
-                            </p>
+    } catch (emailError) {
 
-                        </div>
-
-                        <p style="margin-top:20px; font-size:14px; color:#444;">
-                            If this was you, no action is required.
-                        </p>
-
-                        <p style="font-size:14px; color:#b00020;">
-                            If you don't recognize this activity, please secure your account immediately by changing your password.
-                        </p>
-
-                        <hr style="margin:20px 0;" />
-
-                        <p style="font-size:12px; color:#888;">
-                            This is an automated security alert.
-                        </p>
-
-                    </div>
-                </div>
-            `,
-        })
-        .catch((err) =>
-            console.error(
-                "Email error:",
-                err
-            )
+        console.error(
+            "Login email failed:",
+            emailError.message
         );
 
-    // =========================================================
-    // COOKIES
-    // =========================================================
+        // Do not fail login just because email failed.
+    }
 
-    const accessCookieOption = {
+    const cookieOptions = {
         httpOnly: true,
+
         secure:
-            process.env.NODE_ENV ===
-            "production",
-        sameSite: "strict",
-        maxAge:
-            15 * 60 * 1000,
+            process.env.NODE_ENV === "production",
+
+        sameSite:
+            process.env.NODE_ENV === "production"
+                ? "none"
+                : "lax"
     };
 
-    const refreshCookieOption = {
-        httpOnly: true,
-        secure:
-            process.env.NODE_ENV ===
-            "production",
-        sameSite: "strict",
-        maxAge:
-            7 * 24 * 60 * 60 * 1000,
-    };
+    res.cookie(
+        "accessToken",
+        accessToken,
+        {
+            ...cookieOptions,
+            maxAge: 15 * 60 * 1000
+        }
+    );
 
-    // =========================================================
-    // SAFE USER
-    // =========================================================
+    res.cookie(
+        "refreshToken",
+        refreshToken,
+        {
+            ...cookieOptions,
+            maxAge:
+                7 * 24 * 60 * 60 * 1000
+        }
+    );
 
-    const loggedInUser =
-        await User.findById(
-            user._id
-        ).select(
-            "-password -refreshToken -forgetPasswordOtp -passwordResetToken -deleteAccountOtp -emailVerificationOTP"
-        );
+    const safeUser = await User.findById(
+        user._id
+    ).select(
+        "-password " +
+        "-refreshToken " +
+        "-forgetPasswordOtp " +
+        "-passwordResetToken " +
+        "-deleteAccountOtp " +
+        "-emailVerificationOTP " +
+        "-twoFactorSecret"
+    );
 
-    // =========================================================
-    // RESPONSE
-    // =========================================================
-
-    return res
-        .status(200)
-        .cookie(
-            "accessToken",
-            accessToken,
-            accessCookieOption
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            {
+                user: safeUser,
+                session: safeSession,
+                accessToken,
+                type: "user"
+            },
+            "User logged in successfully"
         )
-        .cookie(
-            "refreshToken",
-            refreshToken,
-            refreshCookieOption
-        )
-        .json(
-            new ApiResponse(
-                200,
-                {
-                    user: loggedInUser,
-                    session: safeSession,
-                    accessToken,
-                    type: "user",
-                },
-                "User Login Or Session Created Successfully"
-            )
-        );
+    );
 });
 
 const logoutCurrentUser = asyncHandler(async (req, res) => {
