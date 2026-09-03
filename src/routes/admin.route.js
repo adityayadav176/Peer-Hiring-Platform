@@ -1,9 +1,9 @@
 import { Router } from "express";
-import { verifyUser } from "../middleware/verifyUser.middleware.js";
-import { verifyAdmin } from "../middleware/verifyAdmin.middleware.js";
-import { getAdminDashboardStats } from "../controllers/admin.controller.js";
+import { adminAuth } from "../middleware/admin.middleware.js";
+import { getAdminDashboardStats, getAllUsers } from "../controllers/admin.controller.js";
 
 const router = Router();
 
-router.get("/dashboard", verifyUser, verifyAdmin, getAdminDashboardStats);
+router.get("/dashboard" ,adminAuth, getAdminDashboardStats);
+router.get("/getUsers" ,adminAuth, getAllUsers);
 export default router;

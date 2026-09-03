@@ -129,7 +129,90 @@ const getAdminDashboardStats = asyncHandler(async (req, res) => {
     );
 });
 
+const getAllUsers = asyncHandler(async (req, res) => {
+
+    const {
+        page = 1,
+        limit = 10,
+        search = "",
+        role,
+        status
+    } = req.query;
+
+    const pageNumber = Math.max(Number(page), 1);
+
+    const limitNumber = Math.min(
+        Math.max(Number(limit), 1),
+        100
+    );
+
+    const query = {};
+
+    // Search by name or email
+    if (search.trim()) {
+        query.$or = [
+            {
+                name: {
+                    $regex: search.trim(),
+                    $options: "i"
+                }
+            },
+            {
+                email: {
+                    $regex: search.trim(),
+                    $options: "i"
+                }
+            }
+        ];
+    }
+
+    // Filter by role
+    if (role) {
+        query.role = role;
+    }
+
+    // Filter by status
+    if (status) {
+        query.status = status;
+    }
+
+    const skip = (pageNumber - 1) * limitNumber;
+
+    const [users, totalUsers] = await Promise.all([
+
+        User.find(query)
+            .select("-password -refreshToken -otp -otpExpiredAt")
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limitNumber)
+            .lean(),
+
+        User.countDocuments(query)
+
+    ]);
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            {
+                data: {
+                    users,
+                    pagination: {
+                        currentPage: pageNumber,
+                        totalPages: Math.ceil(
+                            totalUsers / limitNumber
+                        ),
+                        totalUsers,
+                        limit: limitNumber
+                    }
+                }
+            }
+        )
+    );
+});
+
 
 export {
-    getAdminDashboardStats
+    getAdminDashboardStats,
+    getAllUsers
 };
