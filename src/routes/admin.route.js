@@ -5,6 +5,7 @@ import { adminAuth } from "../middleware/admin.middleware.js";
 import {
     blockCompany,
     blockUser,
+    deleteUser,
     getAdminDashboardStats,
     getAllAdminCompanies,
     getAllUsers,
@@ -50,6 +51,12 @@ router.patch(
     "/users/:userId/unblock",
     adminAuth,
     unblockUser
+)
+
+router.delete(
+    "/users/:userId/delete",
+    adminAuth,
+    deleteUser
 )
 // ADMIN COMPANIES
 

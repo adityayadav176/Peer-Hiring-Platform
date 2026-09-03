@@ -6,6 +6,8 @@ import { User } from "../models/user.model.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
+import { Session } from "../models/session.model.js";
+import { Conversation } from "../models/converstion.model.js"
 import mongoose from "mongoose";
 
 
@@ -212,6 +214,85 @@ const unblockUser = asyncHandler(async (req, res) => {
                     lockUntil: user.lockUntil
                 },
                 "User unblocked successfully"
+            )
+        );
+});
+
+const deleteUser = asyncHandler(async (req, res) => {
+
+    const { userId } = req.params;
+
+    // Validate user ID
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+        throw new ApiError(400, "Invalid user ID");
+    }
+
+    // Check user exists
+    const user = await User.findById(userId);
+
+    if (!user) {
+        throw new ApiError(404, "User not found");
+    }
+
+    // Delete profile
+    await Profile.deleteMany({
+        user: userId
+    });
+
+    // Delete resumes
+    await Resume.deleteMany({
+        user: userId
+    });
+
+    // Delete applications
+    await Application.deleteMany({
+        applicant: userId
+    });
+
+    // Delete interviews where user is involved
+    await Interview.deleteMany({
+        $or: [
+            { candidate: userId },
+            { interviewer: userId }
+        ]
+    });
+
+    // Delete sessions
+    await Session.deleteMany({
+        user: userId
+    });
+
+    // Find conversations involving this user
+    const conversations = await Conversation.find({
+        participants: userId
+    }).select("_id");
+
+    const conversationIds = conversations.map(
+        (conversation) => conversation._id
+    );
+
+    // Delete messages from those conversations
+    if (conversationIds.length > 0) {
+        await Message.deleteMany({
+            conversation: { $in: conversationIds }
+        });
+
+        // Delete conversations
+        await Conversation.deleteMany({
+            _id: { $in: conversationIds }
+        });
+    }
+
+    // Finally delete user
+    await User.findByIdAndDelete(userId);
+
+    return res
+        .status(200)
+        .json(
+            new ApiResponse(
+                200,
+                null,
+                "User and all related data deleted successfully"
             )
         );
 });
@@ -657,8 +738,6 @@ const blockCompany = asyncHandler(async (req, res) => {
     );
 });
 
-
-
 export {
     getAdminDashboardStats,
     getAllUsers,
@@ -669,5 +748,6 @@ export {
     getAllAdminCompanies,
     getUserById,
     blockUser,
-    unblockUser
+    unblockUser,
+    deleteUser
 };
