@@ -2,6 +2,7 @@ import { Report } from "../models/report.model.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
+import mongoose from "mongoose";
 
 
 const getAllReports = asyncHandler(async (req, res) => {
@@ -129,11 +130,48 @@ const resolveReport = asyncHandler(async (req, res) => {
     );
 });
 
+const rejectReport = asyncHandler(async (req, res) => {
 
+    const { reportId } = req.params;
+    const { adminNote = "" } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(reportId)) {
+        throw new ApiError(400, "Invalid report ID");
+    }
+
+    const report = await Report.findById(reportId);
+
+    if (!report) {
+        throw new ApiError(404, "Report not found");
+    }
+
+    if (report.status !== "pending") {
+        throw new ApiError(
+            400,
+            `Report is already ${report.status}`
+        );
+    }
+
+    report.status = "rejected";
+    report.adminNote = adminNote;
+    report.resolvedBy = req.user._id;
+    report.resolvedAt = new Date();
+
+    await report.save();
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            report,
+            "Report rejected successfully"
+        )
+    );
+});
 
 
 export {
     getAllReports,
     getReportById,
-    resolveReport
+    resolveReport,
+    rejectReport
 }

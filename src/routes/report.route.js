@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { adminAuth } from "../middleware/admin.middleware.js";
-import { getAllReports, getReportById, resolveReport } from "../controllers/report.controller.js";
+import { getAllReports, getReportById, rejectReport, resolveReport } from "../controllers/report.controller.js";
 
 const router = Router();
 
@@ -21,5 +21,13 @@ router.patch(
     adminAuth,
     resolveReport
 )
+
+router.patch(
+    "/:reportId/reject",
+    adminAuth,
+    rejectReport
+)
+
+
 
 export default router;
