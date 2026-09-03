@@ -798,6 +798,164 @@ const updateUserStatus = asyncHandler(async (req, res) => {
         );
 });
 
+const blockJob = asyncHandler(async (req, res) => {
+    const { jobId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(jobId)) {
+        throw new ApiError(400, "Invalid job ID");
+    }
+
+    const job = await Job.findById(jobId);
+
+    if (!job) {
+        throw new ApiError(404, "Job not found");
+    }
+
+    if (job.isBlocked) {
+        throw new ApiError(400, "Job is already blocked");
+    }
+
+    job.isBlocked = true;
+
+    await job.save({
+        validateBeforeSave: false
+    });
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            {
+                jobId: job._id,
+                isBlocked: job.isBlocked
+            },
+            "Job blocked successfully"
+        )
+    );
+});
+
+const deleteJob = asyncHandler(async (req, res) => {
+    const { jobId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(jobId)) {
+        throw new ApiError(400, "Invalid job ID");
+    }
+
+    const job = await Job.findById(jobId);
+
+    if (!job) {
+        throw new ApiError(404, "Job not found");
+    }
+
+    await Job.findByIdAndDelete(jobId);
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            {
+                jobId
+            },
+            "Job deleted successfully"
+        )
+    );
+});
+
+const getAllJobs = asyncHandler(async (req, res) => {
+    const {
+        page = 1,
+        limit = 10,
+        search,
+        status,
+        isBlocked
+    } = req.query;
+
+    const pageNumber = Math.max(Number(page), 1);
+    const limitNumber = Math.min(Math.max(Number(limit), 1), 100);
+    const skip = (pageNumber - 1) * limitNumber;
+
+    const query = {};
+
+    // Search
+    if (search?.trim()) {
+        query.$or = [
+            {
+                title: {
+                    $regex: search.trim(),
+                    $options: "i"
+                }
+            },
+            {
+                description: {
+                    $regex: search.trim(),
+                    $options: "i"
+                }
+            }
+        ];
+    }
+
+    // Status filter
+    if (status) {
+        query.status = status;
+    }
+
+    // Block filter
+    if (isBlocked !== undefined) {
+        query.isBlocked = isBlocked === "true";
+    }
+
+    const [jobs, totalJobs] = await Promise.all([
+        Job.find(query)
+            .populate("companyId")
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limitNumber),
+
+        Job.countDocuments(query)
+    ]);
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            {
+                jobs,
+                pagination: {
+                    currentPage: pageNumber,
+                    totalPages: Math.ceil(
+                        totalJobs / limitNumber
+                    ),
+                    totalJobs,
+                    limit: limitNumber
+                }
+            },
+            "Jobs fetched successfully"
+        )
+    );
+});
+
+const getJobById = asyncHandler(async (req, res) => {
+    const { jobId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(jobId)) {
+        throw new ApiError(400, "Invalid job ID");
+    }
+
+    const job = await Job.findById(jobId)
+        .populate("companyId");
+
+    if (!job) {
+        throw new ApiError(404, "Job not found");
+    }
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            {
+                job
+            },
+            "Job fetched successfully"
+        )
+    );
+});
+
 export {
     getAdminDashboardStats,
     getAllUsers,
@@ -810,5 +968,9 @@ export {
     blockUser,
     unblockUser,
     deleteUser,
-    updateUserStatus
+    updateUserStatus,
+    blockJob,
+    deleteJob,
+    getAllJobs,
+    getJobById
 };

@@ -4,12 +4,16 @@ import { adminAuth } from "../middleware/admin.middleware.js";
 
 import {
     blockCompany,
+    blockJob,
     blockUser,
+    deleteJob,
     deleteUser,
     getAdminDashboardStats,
     getAllAdminCompanies,
+    getAllJobs,
     getAllUsers,
     getCompanyById,
+    getJobById,
     getUserById,
     rejectCompany,
     unblockUser,
@@ -105,5 +109,30 @@ router.patch(
     adminAuth,
     blockCompany
 );
+
+// ADMIN JOBS
+
+router.get(
+    "/jobs", 
+    adminAuth, 
+    getAllJobs);
+
+router.get(
+    "/jobs/:jobId",
+     adminAuth,
+     getJobById
+    );
+
+router.patch(
+    "/jobs/:jobId/block",
+     adminAuth,
+      blockJob
+    );
+
+router.delete(
+    "/jobs/:jobId", 
+    adminAuth,
+     deleteJob
+    );
 
 export default router;

@@ -71,6 +71,10 @@ const JobSchema = new Schema({
         default: 0,
         min: 0
     },
+    isBlocked : {
+        type: Boolean,
+        default: false
+    },
     isDeleted: {
         type: Boolean,
         default: false
