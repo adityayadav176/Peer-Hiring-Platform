@@ -17,6 +17,7 @@ import { UAParser } from "ua-parser-js";
 import { Session } from "../models/session.model.js";
 import { deleteFromCloudinary } from "../utils/cloudinary.js";
 import mongoose from "mongoose";
+import Admin from "../models/admin.model.js";
 
 const generateAccessAndRefreshToken = async (userId, sessionId) => {
     const user = await User.findById(userId);
@@ -300,19 +301,141 @@ const loginUser = asyncHandler(async (req, res) => {
     const { email, phoneNo, password } = req.body;
     const ipAddress = req.ip;
 
-
     if ((!email && !phoneNo) || !password) {
-        throw new ApiError(400, "All Fileds Are Required");
+        throw new ApiError(400, "All Fields Are Required");
     }
 
     const normalizedEmail = email?.toLowerCase().trim();
+    console.log("LOGIN EMAIL:", normalizedEmail);
+    // =========================================================
+    // ADMIN LOGIN
+    // =========================================================
+
+    if (normalizedEmail) {
+        const admin = await Admin.findOne({
+            email: normalizedEmail,
+        }).select("+password");
+
+        if (!admin) {
+            throw new ApiError(400, "Admin not found");
+        }
+
+        if (admin) {
+            if (!admin.isActive) {
+                throw new ApiError(
+                    403,
+                    "Admin account is inactive"
+                );
+            }
+
+            const isPasswordCorrect = await bcrypt.compare(
+                password,
+                admin.password
+            );
+
+            if (!isPasswordCorrect) {
+                throw new ApiError(
+                    400,
+                    "Invalid Credentials"
+                );
+            }
+
+            // Update last login
+            admin.lastLoginAt = new Date();
+
+            await admin.save({
+                validateBeforeSave: false,
+            });
+
+            // Generate Admin Access Token
+            const accessToken = JWT.sign(
+                {
+                    adminId: admin._id,
+                    type: "admin",
+                },
+                process.env.ACCESS_TOKEN_SECRET,
+                {
+                    expiresIn: "15m",
+                }
+            );
+
+            // Generate Admin Refresh Token
+            const refreshToken = JWT.sign(
+                {
+                    adminId: admin._id,
+                    type: "admin",
+                },
+                process.env.REFRESH_TOKEN_SECRET,
+                {
+                    expiresIn: "7d",
+                }
+            );
+
+            const loggedInAdmin = {
+                _id: admin._id,
+                name: admin.name,
+                email: admin.email,
+                type: "admin",
+            };
+
+            const accessCookieOption = {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === "production",
+                sameSite: "strict",
+                maxAge: 15 * 60 * 1000,
+            };
+
+            const refreshCookieOption = {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === "production",
+                sameSite: "strict",
+                maxAge: 7 * 24 * 60 * 60 * 1000,
+            };
+
+            return res
+                .status(200)
+                .cookie(
+                    "accessToken",
+                    accessToken,
+                    accessCookieOption
+                )
+                .cookie(
+                    "refreshToken",
+                    refreshToken,
+                    refreshCookieOption
+                )
+                .json(
+                    new ApiResponse(
+                        200,
+                        {
+                            loggedInAdmin,
+                            accessToken,
+                            // type: "admin",
+                        },
+                        "Admin Login Successfully"
+                    )
+                );
+        }
+    }
+
+    console.log("ADMIN:", admin);
+
+    // =========================================================
+    // USER LOGIN
+    // =========================================================
 
     const user = await User.findOne({
-        $or: [{ email: normalizedEmail }, { phoneNo }]
-    })
+        $or: [
+            { email: normalizedEmail },
+            { phoneNo },
+        ],
+    });
 
     if (!user) {
-        throw new ApiError(404, "User Not Found");
+        throw new ApiError(
+            404,
+            "User Not Found"
+        );
     }
 
     if (!user.password) {
@@ -322,31 +445,48 @@ const loginUser = asyncHandler(async (req, res) => {
         );
     }
 
-    const remainingMinutes =
-        user.lockUntil
-            ? Math.ceil((user.lockUntil - Date.now()) / (1000 * 60))
-            : 0;
+    const remainingMinutes = user.lockUntil
+        ? Math.ceil(
+            (user.lockUntil - Date.now()) /
+            (1000 * 60)
+        )
+        : 0;
 
-    if (user.lockUntil && user.lockUntil > Date.now()) {
-        throw new ApiError(403, `Account locked. Try again in ${remainingMinutes} minute(s).`)
+    if (
+        user.lockUntil &&
+        user.lockUntil > Date.now()
+    ) {
+        throw new ApiError(
+            403,
+            `Account locked. Try again in ${remainingMinutes} minute(s).`
+        );
     }
 
-    const isPasswordCorrect = await user.isPasswordCorrect(password);
+    const isPasswordCorrect =
+        await user.isPasswordCorrect(password);
 
     if (!isPasswordCorrect) {
-
         user.failedLoginAttempts += 1;
 
         if (user.failedLoginAttempts >= 5) {
-            user.lockUntil = Date.now() + 15 * 60 * 1000;
+            user.lockUntil =
+                Date.now() +
+                15 * 60 * 1000;
         }
 
         await user.save({
-            validateBeforeSave: false
+            validateBeforeSave: false,
         });
 
-        throw new ApiError(400, "Invalid Credintials");
+        throw new ApiError(
+            400,
+            "Invalid Credentials"
+        );
     }
+
+    // =========================================================
+    // 2FA
+    // =========================================================
 
     if (user.twoFactorEnabled) {
         return res.status(200).json(
@@ -354,66 +494,109 @@ const loginUser = asyncHandler(async (req, res) => {
                 200,
                 {
                     twoFactorRequired: true,
-                    userId: user._id
+                    userId: user._id,
+                    type: "user",
                 },
                 "2FA required"
             )
         );
     }
 
-    const { browser = {}, os = {}, device = {} } =
-        req.deviceInfo || {};
+    // =========================================================
+    // DEVICE INFORMATION
+    // =========================================================
 
-    // Create Session First
+    const {
+        browser = {},
+        os = {},
+        device = {},
+    } = req.deviceInfo || {};
+
+    // =========================================================
+    // CREATE SESSION
+    // =========================================================
+
     const session = await Session.create({
         userId: user._id,
-
         refreshToken: "",
 
-        deviceModel: device.model || "",
-        device: device.name || `${browser} on ${os}`,
-        deviceType: device.type || "desktop",
-        deviceVendor: device.vendor || "",
+        deviceModel:
+            device.model || "",
 
-        browser: browser.name || "Unknown",
-        browserVersion: browser.version || "",
+        device:
+            device.name ||
+            `${browser.name || "Unknown Browser"} on ${os.name || "Unknown OS"
+            }`,
 
-        os: os.name || "Unknown",
-        osVersion: os.version || "",
+        deviceType:
+            device.type || "desktop",
+
+        deviceVendor:
+            device.vendor || "",
+
+        browser:
+            browser.name || "Unknown",
+
+        browserVersion:
+            browser.version || "",
+
+        os:
+            os.name || "Unknown",
+
+        osVersion:
+            os.version || "",
 
         ipAddress,
 
         userAgent:
-            req.headers["user-agent"] || ""
+            req.headers["user-agent"] || "",
     });
 
-    // Generate Tokens Using SessionId
+    // =========================================================
+    // GENERATE USER TOKENS
+    // =========================================================
+
     const accessToken =
-        user.generateAccessToken(session._id);
+        user.generateAccessToken(
+            session._id
+        );
 
     const refreshToken =
-        user.generateRefreshToken(session._id);
+        user.generateRefreshToken(
+            session._id
+        );
 
-    // Hash Refresh Token
-    const hashedRefreshToken = crypto
-        .createHash("sha256")
-        .update(refreshToken)
-        .digest("hex");
+    // =========================================================
+    // HASH REFRESH TOKEN
+    // =========================================================
 
-    // Save Hash In Session
-    session.refreshToken = hashedRefreshToken;
+    const hashedRefreshToken =
+        crypto
+            .createHash("sha256")
+            .update(refreshToken)
+            .digest("hex");
+
+    session.refreshToken =
+        hashedRefreshToken;
 
     await session.save({
-        validateBeforeSave: false
+        validateBeforeSave: false,
     });
 
-    // Reset Login Attempts
+    // =========================================================
+    // RESET LOGIN ATTEMPTS
+    // =========================================================
+
     user.failedLoginAttempts = 0;
     user.lockUntil = null;
 
     await user.save({
-        validateBeforeSave: false
+        validateBeforeSave: false,
     });
+
+    // =========================================================
+    // SAFE SESSION
+    // =========================================================
 
     const safeSession = {
         sessionId: session._id,
@@ -422,100 +605,191 @@ const loginUser = asyncHandler(async (req, res) => {
             session.device ||
             `${session.browser} on ${session.os}`,
 
-        deviceModel: session.deviceModel,
-        deviceType: session.deviceType,
-        deviceVendor: session.deviceVendor,
+        deviceModel:
+            session.deviceModel,
 
-        browser: session.browser,
-        browserVersion: session.browserVersion,
+        deviceType:
+            session.deviceType,
 
-        os: session.os,
-        osVersion: session.osVersion,
+        deviceVendor:
+            session.deviceVendor,
 
-        ipAddress: session.ipAddress,
+        browser:
+            session.browser,
 
-        lastActive: session.lastActive,
-        createdAt: session.createdAt
+        browserVersion:
+            session.browserVersion,
+
+        os:
+            session.os,
+
+        osVersion:
+            session.osVersion,
+
+        ipAddress:
+            session.ipAddress,
+
+        lastActive:
+            session.lastActive,
+
+        createdAt:
+            session.createdAt,
     };
+
+    // =========================================================
+    // LOGIN EMAIL
+    // =========================================================
 
     const deviceName =
         session.device ||
-        `${session.browser || "Unknown Browser"} on ${session.os || "Unknown OS"}`;
+        `${session.browser || "Unknown Browser"} on ${session.os || "Unknown OS"
+        }`;
 
-    const time = new Date().toISOString();
+    const time =
+        new Date().toISOString();
 
-    await transporter.sendMail({
-        from: process.env.SENDER_EMAIL,
-        to: user.email,
-        subject: 'New Login Detected on Your Account',
-        html: ` <div style="font-family: Arial, sans-serif; background:#f4f4f4; padding:20px;">
-    <div style="max-width:600px; margin:auto; background:#ffffff; padding:20px; border-radius:10px; border:1px solid #e5e5e5;">
-      
-      <h2 style="color:#111;">🔐 New Login Detected</h2>
+    await transporter
+        .sendMail({
+            from:
+                process.env.SENDER_EMAIL,
 
-      <p style="font-size:14px; color:#333;">
-        Hi <b>${user.name}</b>, we noticed a new login to your account.
-      </p>
+            to:
+                user.email,
 
-      <div style="background:#f9f9f9; padding:15px; border-radius:8px; margin-top:15px;">
-        <p><b>Device:</b> ${deviceName}</p>
-  <p><b>Browser:</b> ${session.browser || "Unknown"}</p>
-  <p><b>Operating System:</b> ${session.os || "Unknown"}</p>
-  <p><b>IP Address:</b> ${session.ipAddress || req.ip}</p>
-  <p><b>Time:</b> ${time}</p>
-      </div>
+            subject:
+                "New Login Detected on Your Account",
 
-      <p style="margin-top:20px; font-size:14px; color:#444;">
-        If this was you, no action is required.
-      </p>
+            html: `
+                <div style="font-family: Arial, sans-serif; background:#f4f4f4; padding:20px;">
+                    <div style="max-width:600px; margin:auto; background:#ffffff; padding:20px; border-radius:10px; border:1px solid #e5e5e5;">
 
-      <p style="font-size:14px; color:#b00020;">
-        If you don’t recognize this activity, please secure your account immediately by changing your password.
-      </p>
+                        <h2 style="color:#111;">
+                            🔐 New Login Detected
+                        </h2>
 
-      <hr style="margin:20px 0;" />
+                        <p style="font-size:14px; color:#333;">
+                            Hi <b>${user.name}</b>, we noticed a new login to your account.
+                        </p>
 
-      <p style="font-size:12px; color:#888;">
-        This is an automated security alert.
-      </p>
-    </div>
-  </div>`,
-    }).catch(err => console.error("Email error:", err));
+                        <div style="background:#f9f9f9; padding:15px; border-radius:8px; margin-top:15px;">
+
+                            <p>
+                                <b>Device:</b> ${deviceName}
+                            </p>
+
+                            <p>
+                                <b>Browser:</b> ${session.browser ||
+                "Unknown"
+                }
+                            </p>
+
+                            <p>
+                                <b>Operating System:</b> ${session.os ||
+                "Unknown"
+                }
+                            </p>
+
+                            <p>
+                                <b>IP Address:</b> ${session.ipAddress ||
+                req.ip
+                }
+                            </p>
+
+                            <p>
+                                <b>Time:</b> ${time}
+                            </p>
+
+                        </div>
+
+                        <p style="margin-top:20px; font-size:14px; color:#444;">
+                            If this was you, no action is required.
+                        </p>
+
+                        <p style="font-size:14px; color:#b00020;">
+                            If you don't recognize this activity, please secure your account immediately by changing your password.
+                        </p>
+
+                        <hr style="margin:20px 0;" />
+
+                        <p style="font-size:12px; color:#888;">
+                            This is an automated security alert.
+                        </p>
+
+                    </div>
+                </div>
+            `,
+        })
+        .catch((err) =>
+            console.error(
+                "Email error:",
+                err
+            )
+        );
+
+    // =========================================================
+    // COOKIES
+    // =========================================================
 
     const accessCookieOption = {
         httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
+        secure:
+            process.env.NODE_ENV ===
+            "production",
         sameSite: "strict",
-        maxAge: 15 * 60 * 1000,
+        maxAge:
+            15 * 60 * 1000,
     };
 
     const refreshCookieOption = {
         httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
+        secure:
+            process.env.NODE_ENV ===
+            "production",
         sameSite: "strict",
-        maxAge: 7 * 24 * 60 * 60 * 1000,
+        maxAge:
+            7 * 24 * 60 * 60 * 1000,
     };
 
-    const loggedInUser = await User.findById(user._id)
-        .select(
+    // =========================================================
+    // SAFE USER
+    // =========================================================
+
+    const loggedInUser =
+        await User.findById(
+            user._id
+        ).select(
             "-password -refreshToken -forgetPasswordOtp -passwordResetToken -deleteAccountOtp -emailVerificationOTP"
         );
 
-    return res.status(200)
-        .cookie("accessToken", accessToken, accessCookieOption)
-        .cookie("refreshToken", refreshToken, refreshCookieOption)
+    // =========================================================
+    // RESPONSE
+    // =========================================================
+
+    return res
+        .status(200)
+        .cookie(
+            "accessToken",
+            accessToken,
+            accessCookieOption
+        )
+        .cookie(
+            "refreshToken",
+            refreshToken,
+            refreshCookieOption
+        )
         .json(
             new ApiResponse(
                 200,
                 {
                     user: loggedInUser,
                     session: safeSession,
-                    accessToken
+                    accessToken,
+                    type: "user",
                 },
-                "User Login OR Seesion Created Successfully"
+                "User Login Or Session Created Successfully"
             )
         );
-})
+});
 
 const logoutCurrentUser = asyncHandler(async (req, res) => {
     const userId = req.user?._id;
