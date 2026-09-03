@@ -64,8 +64,37 @@ const getAllReports = asyncHandler(async (req, res) => {
     );
 });
 
+const getReportById = asyncHandler(async (req, res) => {
+
+    const { reportId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(reportId)) {
+        throw new ApiError(400, "Invalid report ID");
+    }
+
+    const report = await Report.findById(reportId)
+        .populate("reporter", "name email avatar role")
+        .populate("reportedUser", "name email avatar role")
+        .populate("reportedJob")
+        .populate("resolvedBy", "name email");
+
+    if (!report) {
+        throw new ApiError(404, "Report not found");
+    }
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            report,
+            "Report fetched successfully"
+        )
+    );
+});
+
+
 
 
 export {
-    getAllReports
+    getAllReports,
+    getReportById
 }
