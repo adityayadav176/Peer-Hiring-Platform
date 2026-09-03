@@ -1,42 +1,75 @@
 import { Router } from "express";
+
 import { adminAuth } from "../middleware/admin.middleware.js";
-import { blockCompany, getAdminDashboardStats, getAllAdminCompanies, getAllUsers, getCompanyById, rejectCompany, verifyCompany } from "../controllers/admin.controller.js";
+
+import {
+    blockCompany,
+    getAdminDashboardStats,
+    getAllAdminCompanies,
+    getAllUsers,
+    getCompanyById,
+    rejectCompany,
+    verifyCompany
+} from "../controllers/admin.controller.js";
+
 
 const router = Router();
-router.get(
-    "/companies/:companyId",
-    adminAuth,
-    getCompanyById
-);
+
+// ADMIN DASHBOARD
+
 router.get(
     "/dashboard",
-    adminAuth, 
+    adminAuth,
     getAdminDashboardStats
 );
+
+// ADMIN USERS
+
 router.get(
     "/getUsers",
     adminAuth,
     getAllUsers
 );
 
-router.patch(
-    "companies/:companyId/verify",
-    adminAuth,
-    verifyCompany
-);
-router.patch(
-    "companies/:companyId/reject",
-    adminAuth,
-    rejectCompany
-);
-router.patch(
-    "companies/:companyId/block",
-    adminAuth,
-    blockCompany
-);
+// ADMIN COMPANIES
+
+// Get all companies
 router.get(
     "/companies",
     adminAuth,
     getAllAdminCompanies
 );
+
+
+// Get company by ID
+router.get(
+    "/companies/:companyId",
+    adminAuth,
+    getCompanyById
+);
+
+
+// Verify company
+router.patch(
+    "/companies/:companyId/verify",
+    adminAuth,
+    verifyCompany
+);
+
+
+// Reject company
+router.patch(
+    "/companies/:companyId/reject",
+    adminAuth,
+    rejectCompany
+);
+
+
+// Block company
+router.patch(
+    "/companies/:companyId/block",
+    adminAuth,
+    blockCompany
+);
+
 export default router;

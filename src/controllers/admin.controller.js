@@ -3,8 +3,10 @@ import { Company } from "../models/company.model.js";
 import { Interview } from "../models/interview.model.js";
 import { Job } from "../models/job.model.js";
 import { User } from "../models/user.model.js";
+import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
+
 
 const getAllUsers = asyncHandler(async (req, res) => {
 
@@ -89,7 +91,6 @@ const getAllUsers = asyncHandler(async (req, res) => {
 });
 
 const getAdminDashboardStats = asyncHandler(async (req, res) => {
-
     const [
         totalUsers,
         totalCandidates,
@@ -102,6 +103,7 @@ const getAdminDashboardStats = asyncHandler(async (req, res) => {
         ClosedJobs,
         expiredJobs,
         draftJobs,
+        pausedJobs,
         totalApplications,
         totalInterviews
     ] = await Promise.all([
@@ -140,6 +142,10 @@ const getAdminDashboardStats = asyncHandler(async (req, res) => {
             status: "DRAFT"
         }),
 
+        Job.countDocuments({
+            status: "PAUSED"
+        }),
+
         Application.countDocuments(),
 
         Interview.countDocuments()
@@ -167,7 +173,8 @@ const getAdminDashboardStats = asyncHandler(async (req, res) => {
                     active: activeJobs,
                     closed: ClosedJobs,
                     expired: expiredJobs,
-                    draft: draftJobs
+                    draft: draftJobs,
+                    paused: pausedJobs,
                 },
 
                 application: {
