@@ -41,10 +41,6 @@ const client = new OAuth2Client(
 )
 
 const registerUser = asyncHandler(async (req, res) => {
-    let avatarUpload = null;
-    let coverUpload = null;
-
-    try {
         const {
             name,
             email,
@@ -131,16 +127,8 @@ const registerUser = asyncHandler(async (req, res) => {
         // UPLOAD TO CLOUDINARY
         // ==============================
 
-        [avatarUpload, coverUpload] =
-            await Promise.all([
-                uploadOnCloudinary(
-                    avatarLocalPath
-                ),
-
-                uploadOnCloudinary(
-                    coverLocalPath
-                )
-            ]);
+        const avatarUpload =  await uploadOnCloudinary(avatarLocalPath);
+      const coverUpload = await uploadOnCloudinary(coverLocalPath);
 
         if (
             !avatarUpload?.secure_url ||
@@ -192,7 +180,7 @@ const registerUser = asyncHandler(async (req, res) => {
         // SEND WELCOME EMAIL
         // ==============================
 
-        transporter
+       await transporter
             .sendMail({
                 from:
                     process.env.SENDER_EMAIL,
@@ -260,41 +248,6 @@ const registerUser = asyncHandler(async (req, res) => {
                     "User registered successfully."
                 )
             );
-
-    } catch (error) {
-
-        // ==============================
-        // CLOUDINARY ROLLBACK
-        // ==============================
-
-        if (avatarUpload?.public_id) {
-            try {
-                await deleteFromCloudinary(
-                    avatarUpload.public_id
-                );
-            } catch (rollbackError) {
-                console.error(
-                    "Avatar rollback failed:",
-                    rollbackError.message
-                );
-            }
-        }
-
-        if (coverUpload?.public_id) {
-            try {
-                await deleteFromCloudinary(
-                    coverUpload.public_id
-                );
-            } catch (rollbackError) {
-                console.error(
-                    "Cover rollback failed:",
-                    rollbackError.message
-                );
-            }
-        }
-
-        throw error;
-    }
 });
 
 const loginUser = asyncHandler(async (req, res) => {

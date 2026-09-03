@@ -63,7 +63,7 @@ const UserSchema = new Schema({
     },
     role: {
         type: String,
-        enum: ["User", "Admin"],
+        enum: ["User", "recruiter"],
         default: "User"
     },
     isVerified: {
@@ -105,6 +105,11 @@ const UserSchema = new Schema({
     lockUntil: {
         type: Date,
         default: null
+    },
+    accountStatus: {
+        type: String,
+        enum: ["active", "blocked", "deleted"],
+        default: "active"
     },
     refreshToken: {
         type: String

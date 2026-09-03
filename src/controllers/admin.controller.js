@@ -6,6 +6,7 @@ import { User } from "../models/user.model.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
+import mongoose from "mongoose";
 
 
 const getAllUsers = asyncHandler(async (req, res) => {
@@ -90,6 +91,131 @@ const getAllUsers = asyncHandler(async (req, res) => {
     );
 });
 
+const getUserById = asyncHandler(async (req, res) => {
+    const { userId } = req.params;
+
+    if (!userId || !mongoose.isValidObjectId(userId)) {
+        throw new ApiError(404, "Invalid UserId");
+    }
+
+    const user = await User.findById(userId)
+        .select(
+            "-password " +
+            "-refreshToken " +
+            "-emailVerificationOTP " +
+            "-emailVerificationOTPExpiry " +
+            "-forgetPasswordOtp " +
+            "-forgetPasswordOtpExpiredAt " +
+            "-passwordResetToken " +
+            "-passwordResetTokenExpiresAt " +
+            "-deleteAccountOtp " +
+            "-deleteAccountOtpExpiredAt " +
+            "-twoFactorSecret"
+        );
+
+    if(!user) {
+        throw new ApiError(404, "User Not Found");
+    }
+
+    return res.status(200)
+    .json(
+        new ApiResponse(
+            200,
+            user,
+            "User fetched successfully"
+        )
+    )
+})
+
+const blockUser = asyncHandler(async (req, res) => {
+    const {userId} = req.params;
+    const {duration} = req.body;
+
+    if(!userId || !mongoose.isValidObjectId(userId)) {
+        throw new ApiError(400, "Invalid UserId");
+    }
+
+    if(!duration || !Number.isInteger(duration)) {
+        throw new ApiError(400, "Duration must be a number");
+    }
+
+    const user = await User.findById(userId);
+
+    if(!user) {
+        throw new ApiError(404, "User Not Found"); 
+    }
+
+    if(user.lockUntil && user.lockUntil > new Date()) {
+        throw new ApiError(400, "User already blocked");
+    }
+
+    const lockUntil = new Date(Date.now() + duration * 60 * 1000);
+
+    user.lockUntil = lockUntil;
+
+    user.tokenVersion += 1;
+
+    user.isOnline = false;
+    user.lastSeen = new Date();
+    user.lastSeenAt = new Date();
+
+    await user.save();
+
+    return res.status(200)
+    .json(
+        new ApiResponse(
+            200, 
+            {
+                userId: user._id,
+                lockUntil: user.lockUntil
+            },
+            "User blocked successfully"
+        )
+    )
+})
+
+const unblockUser = asyncHandler(async (req, res) => {
+    const { userId } = req.params;
+
+    // Validate user ID
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+        throw new ApiError(400, "Invalid user ID");
+    }
+
+    // Find user
+    const user = await User.findById(userId);
+
+    if (!user) {
+        throw new ApiError(404, "User not found");
+    }
+
+    // Check if user is currently blocked
+    if (!user.lockUntil || user.lockUntil <= new Date()) {
+        throw new ApiError(400, "User is not currently blocked");
+    }
+
+    // Remove temporary block
+    user.lockUntil = null;
+
+    // Invalidate existing tokens
+    user.tokenVersion += 1;
+
+    await user.save();
+
+    return res
+        .status(200)
+        .json(
+            new ApiResponse(
+                200,
+                {
+                    userId: user._id,
+                    lockUntil: user.lockUntil
+                },
+                "User unblocked successfully"
+            )
+        );
+});
+
 const getAdminDashboardStats = asyncHandler(async (req, res) => {
     const [
         totalUsers,
@@ -110,9 +236,9 @@ const getAdminDashboardStats = asyncHandler(async (req, res) => {
 
         User.countDocuments(),
 
-        User.countDocuments({role: "User"}),
+        User.countDocuments({ role: "User" }),
 
-        User.countDocuments({role: "recruiter"}),
+        User.countDocuments({ role: "recruiter" }),
 
         Company.countDocuments(),
 
@@ -531,6 +657,8 @@ const blockCompany = asyncHandler(async (req, res) => {
     );
 });
 
+
+
 export {
     getAdminDashboardStats,
     getAllUsers,
@@ -538,5 +666,8 @@ export {
     rejectCompany,
     blockCompany,
     getCompanyById,
-    getAllAdminCompanies
+    getAllAdminCompanies,
+    getUserById,
+    blockUser,
+    unblockUser
 };

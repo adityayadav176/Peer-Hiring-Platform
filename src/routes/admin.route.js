@@ -4,11 +4,14 @@ import { adminAuth } from "../middleware/admin.middleware.js";
 
 import {
     blockCompany,
+    blockUser,
     getAdminDashboardStats,
     getAllAdminCompanies,
     getAllUsers,
     getCompanyById,
+    getUserById,
     rejectCompany,
+    unblockUser,
     verifyCompany
 } from "../controllers/admin.controller.js";
 
@@ -31,6 +34,23 @@ router.get(
     getAllUsers
 );
 
+router.get(
+    "/users/:userId",
+    adminAuth,
+    getUserById
+)
+
+router.patch(
+    "/users/:userId/block",
+    adminAuth,
+    blockUser
+)
+
+router.patch(
+    "/users/:userId/unblock",
+    adminAuth,
+    unblockUser
+)
 // ADMIN COMPANIES
 
 // Get all companies
