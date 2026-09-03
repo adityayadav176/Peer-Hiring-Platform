@@ -1,7 +1,6 @@
 import jwt from "jsonwebtoken";
 import { User } from "../models/user.model.js";
 import { Session } from "../models/session.model.js";
-import { ApiError } from "../utils/ApiError.js";
 
 export const socketAuth = async (socket, next) => {
     try {
