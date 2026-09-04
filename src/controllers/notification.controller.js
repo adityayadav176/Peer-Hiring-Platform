@@ -51,8 +51,22 @@ const markNotificationAsReadController = asyncHandler(async (req, res) => {
     )
 })
 
+const markAllNotificationsAsReadController = asyncHandler(async (req, res) => {
+    const userId = req.user._id;
+
+    const result = await markAllNotificationsAsRead(userId);
+
+    return res.status(200)
+    .json(
+        new ApiResponse(200, result, "All Notification marked as read")
+    )
+})
+
+
+
 export {
     getMyNotificationsController,
     getUnreadNotificationCountController,
-    markNotificationAsReadController
+    markNotificationAsReadController,
+    markAllNotificationsAsReadController
 }
