@@ -5,32 +5,17 @@ import { Message } from "../models/message.model.js";
 import { User } from "../models/user.model.js";
 
 import { socketAuth } from "./socket.auth.js";
+import { setIo } from "./socket.manager.js";
 
 export const initializeSocket = (io) => {
-    // ==========================================
-    // SOCKET AUTHENTICATION
-    // ==========================================
-
+    setIo(io);
     io.use(socketAuth);
-
-    // ==========================================
-    // ONLINE USERS
-    // userId -> Set(socketIds)
-    // ==========================================
-
     const onlineUsers = new Map();
 
-    // ==========================================
-    // CONNECTION
-    // ==========================================
 
     io.on("connection", async (socket) => {
-        console.log("====================================");
         console.log("User connected:", socket.id);
 
-        // ==========================================
-        // AUTHENTICATED USER
-        // ==========================================
 
         const userId = socket.user._id.toString();
 
