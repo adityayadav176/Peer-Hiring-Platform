@@ -403,6 +403,50 @@ export const initializeSocket = (io) => {
                 })
             }
         })
+
+               // CAMERA TOGGLED 
+
+        socket.on("camera_toggled", async (data) => {
+            try {
+                const { interviewRoomId, enabled } = data || {};
+
+                if (!interviewRoomId || typeof enabled !== "boolean") {
+                    socket.emit("socket_error", {
+                        event: "camera_toggled",
+                        message: "interviewRoomId or camera status are required"
+                    })
+                }
+
+                const userId = socket.user._id;
+
+                const interview = await authorizeInterviewRoom({
+                    interviewRoomId,
+                    userId
+                })
+
+                const interviewRoom = `interview:${interview.interviewRoomId.toString()}`;
+
+                if (!socket.rooms.has(interviewRoom)) {
+                    socket.emit("socket_error", {
+                        event: "camera_taggled",
+                        message: "You have not joined this room"
+                    })
+                }
+
+                socket.to(interviewRoom).emit("remote_camera_toggled", {
+                    userId: userId.toString(),
+                    enabled
+                });
+
+            } catch (error) {
+                console.error("Camera toggled Error: ", error.message);
+
+                socket.emit("socket_error", {
+                    event: "camera_toggled",
+                    message: "Failed to toggled camera"
+                })
+            }
+        })
         // JOIN CONVERSATION
 
         socket.on(
