@@ -1,5 +1,19 @@
 import { Notification } from "../models/notification.model.js";
 import {User} from "../models/user.model.js"
+import notificationQueue from "../config/notification.queue.js";
+
+const queueNotification = async({recipient, sender, type, title, message, data}) => {
+    const job = await notificationQueue.add("create-notification", {
+        recipient,
+        sender,
+        type,
+        title,
+        message,
+        data,
+    });
+
+    return job;
+}
 const createNotification = async ({recipient,sender = null,type,title,message,data = {}}) => {
     const notification = await Notification.create({
         recipient,
@@ -135,6 +149,7 @@ const deleteNotification = async ({notificationId,userId}) => {
 };
 
 export {
+    queueNotification,
     createNotification,
     createBulkNotifications,
     createNotificationForAllUsers,
