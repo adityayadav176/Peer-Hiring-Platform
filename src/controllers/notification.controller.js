@@ -32,7 +32,27 @@ const getUnreadNotificationCountController = asyncHandler(async(req, res) => {
   )
 })
 
+const markNotificationAsReadController = asyncHandler(async (req, res) => {
+    const userId = req.user._id;
+    const {notificationId} = req.params;
+
+    const notification = await markNotificationAsRead({
+        notificationId,
+        userId
+    });
+
+    if(!notification) {
+        throw new ApiError(400, "Notification not found or already read");
+    }
+
+    return res.status(200)
+    .json(
+        new ApiResponse(200, notification, "Notification marked as read")
+    )
+})
+
 export {
     getMyNotificationsController,
-    getUnreadNotificationCountController
+    getUnreadNotificationCountController,
+    markNotificationAsReadController
 }
