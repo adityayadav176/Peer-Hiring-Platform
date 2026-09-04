@@ -42,6 +42,7 @@ import AdminRouter from "./routes/admin.route.js"
 import ConversationRouter from "./routes/conversation.route.js"
 import MessageRouter from "./routes/message.route.js"
 import ReportRouter from "./routes/report.route.js"
+import NotificationRouter from "./routes/notification.route.js"
 
 // route declartion
 app.use("/api/v1/auth", UserRouter);
@@ -56,6 +57,7 @@ app.use("/api/v1/admin", AdminRouter);
 app.use("/api/v1/conversation", ConversationRouter);
 app.use("/api/v1/messages", MessageRouter);
 app.use("/api/v1/reports", ReportRouter);
+app.use("/api/v1/notification", NotificationRouter);
 
 app.use(errorHandler);
 
