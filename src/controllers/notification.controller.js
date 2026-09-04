@@ -21,6 +21,18 @@ const getMyNotificationsController = asyncHandler(async (req, res) => {
     )
 })
 
+const getUnreadNotificationCountController = asyncHandler(async(req, res) => {
+  const userId = req.user._id;
+  
+  const count = getUnreadNotificationCount(userId);
+
+  return res.status(200)
+  .json(
+    new ApiResponse(200, count, "Unread notification fetched successfully")
+  )
+})
+
 export {
-    getMyNotificationsController
+    getMyNotificationsController,
+    getUnreadNotificationCountController
 }
