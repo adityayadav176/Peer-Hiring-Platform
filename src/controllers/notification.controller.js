@@ -62,11 +62,29 @@ const markAllNotificationsAsReadController = asyncHandler(async (req, res) => {
     )
 })
 
+const deleteNotificationController = asyncHandler(async (req, res) => {
+    const userId = req.user_id;
+    const {notificationId} = req.params;
 
+    const notification = await deleteNotification({
+        notificationId,
+        userId
+    });
+
+    if(!notification) {
+        throw new ApiError(404, "Notification not found");
+    }
+
+    return res.status(200)
+    .json(
+        new ApiResponse(200, {}, "Notification Deleted Successfully")
+    );
+})
 
 export {
     getMyNotificationsController,
     getUnreadNotificationCountController,
     markNotificationAsReadController,
-    markAllNotificationsAsReadController
+    markAllNotificationsAsReadController,
+    deleteNotificationController
 }
