@@ -1,0 +1,26 @@
+import { ApiResponse } from "../utils/ApiResponse.js"
+import { ApiError } from "../utils/ApiError.js"
+import { asyncHandler } from "../utils/asyncHandler.js"
+
+import { getMyNotifications, getUnreadNotificationCount, markAllNotificationsAsRead, markNotificationAsRead, deleteNotification } from "../services/notification.service";
+
+const getMyNotificationsController = asyncHandler(async (req, res) => {
+    const userId = req.user._id;
+
+    const {page, limit} = req.query;
+
+    const result = await getMyNotifications({
+        userId,
+        page,
+        limit
+    });
+
+    return res.status(200)
+    .json(
+        new ApiResponse(200, result, "Notifcation Fetched successfully")
+    )
+})
+
+export {
+    getMyNotificationsController
+}
