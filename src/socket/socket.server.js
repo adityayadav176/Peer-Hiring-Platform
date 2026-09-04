@@ -220,6 +220,49 @@ export const initializeSocket = (io) => {
                 })
             }
         })
+
+        
+        // ICE_CANDIDATE
+
+        socket.on("ice_candidate", async (data) => {
+            try {
+                const { interviewRoomId, candidate } = data || {};
+
+                if (!interviewRoomId || !candidate) {
+                    socket.emit("socket_error", {
+                        event: "ice_candidate",
+                        message: "interviewRoom Id OR candidate are required"
+                    })
+                }
+
+                const userId = socket.user._id;
+
+                const interview = await authorizeInterviewRoom({
+                    interviewRoomId, candidate
+                });
+
+                const interviewRoom = `interview:${interview.interviewRoomId.toString()}`;
+
+                if (!socket.rooms.has(interviewRoom)) {
+                    socket.emit("socket_error", {
+                        event: "ice_candidate",
+                        message: "You are not joined this interview"
+                    })
+                };
+
+                socket.to(interviewRoom).emit("ice_candidate", {
+                    userId: userId.toString(),
+                    candidate
+                });
+            } catch (error) {
+                console.error("Ice candidate Error: ", error.message);
+
+                socket.emit("socket_error", {
+                    event: "ice_candidate",
+                    message: "Failed to send ICE candidate"
+                })
+            };
+        });im
         // JOIN CONVERSATION
 
         socket.on(
