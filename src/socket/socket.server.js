@@ -534,6 +534,49 @@ export const initializeSocket = (io) => {
                 })
             }
         })
+
+              // SCREEN SHARE OFF 
+
+        socket.on("screen_share_stopped", async (data) => {
+            try {
+                const { interviewRoomId } = data || {};
+
+                if (!interviewRoomId) {
+                    socket.emti("socket_error", {
+                        event: "screen_share_stopped",
+                        message: "interviewRoomID is required"
+                    })
+                }
+
+                const userId = socker.user._id;
+
+                const interview = await authorizeInterviewRoom({
+                    interviewRoomId,
+                    userId
+                })
+
+                const interviewRoom = `interview:${interview.interviewRoomId.toString()}`;
+
+                if (!socket.rooms.has(interviewRoom)) {
+                    socket.emit("socket_error", {
+                        event: "screen_share_stopped",
+                        message: "You have not joined this room"
+                    })
+                }
+
+                socket.to(interviewRoom).emit("remote_screen_share_stopped", {
+                    userId: userId.toString()
+                });
+
+            } catch (error) {
+                console.error("screen share stop error: ", error.message);
+
+                socket.emit("socket_error", {
+                    event: "screen_share_stopped",
+                    message: "Failed to stop screen sharing"
+                })
+            }
+        })
         // JOIN CONVERSATION
 
         socket.on(
