@@ -1,13 +1,14 @@
 import { Worker } from "bullmq";
 import redisConnection from "../config/redis.js";
 import { Notification } from "../models/notification.model.js";
+import { emitToUser } from "../socket/socket.manager.js";
 
 
 const notificationWorker = new Worker(
     "notification-queue",
 
-    async(job) => {
-        const {recipient, sender, type, title, message, data} = job.data;
+    async (job) => {
+        const { recipient, sender, type, title, message, data } = job.data;
 
         console.log(`Proccessing notification job : ${job.id}`);
 
@@ -19,6 +20,17 @@ const notificationWorker = new Worker(
             message,
             data: data || {},
         })
+
+
+        emitToUser(
+            recipient,
+            "new_notification",
+            {
+                success: true,
+                notification
+            })
+
+        console.log(`Notification sent to user : ${recipient}`);
 
         console.log(`Notification created: ${notification._id}`);
 
