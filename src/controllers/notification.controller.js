@@ -2,7 +2,7 @@ import { ApiResponse } from "../utils/ApiResponse.js"
 import { ApiError } from "../utils/ApiError.js"
 import { asyncHandler } from "../utils/asyncHandler.js"
 
-import { getMyNotifications, getUnreadNotificationCount, markAllNotificationsAsRead, markNotificationAsRead, deleteNotification } from "../services/notification.service";
+import { getMyNotifications, getUnreadNotificationCount, markAllNotificationsAsRead, markNotificationAsRead, deleteNotification } from "../services/notification.service.js";
 
 const getMyNotificationsController = asyncHandler(async (req, res) => {
     const userId = req.user._id;
