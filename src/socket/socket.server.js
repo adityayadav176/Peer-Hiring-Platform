@@ -577,6 +577,57 @@ export const initializeSocket = (io) => {
                 })
             }
         })
+
+        
+        // CANDIDATE TAB CHANGE
+
+        socket.on("candidate_tab_changed", async (data) => {
+            try {
+                const { interviewRoomId } = data || {};
+
+                if (!interviewRoomId) {
+                    socket.emit("socket_error", {
+                        event: "candidate_tab_changed",
+                        message: "InterviewRoomId is required"
+                    })
+                }
+
+                const userId = socket.user._id;
+
+                const interview = await authorizeInterviewRoom({
+                    interviewRoomId,
+                    userId
+                })
+
+                if (interview.candidate.toString() !== userId.toString()) {
+                    socket.emit("socket_error", {
+                        event: "candidate_tab_changed",
+                        message: "Only candidate can trigger this event"
+                    })
+                }
+
+                const interviewRoom = `interview${interview.interviewRoomId.toString()}`;
+
+                if (!socket.rooms.has(interviewRoom)) {
+                    return socket.emit("socket_error", {
+                        event: "candidate_tab_changed",
+                        message:
+                            "You have not joined this interview"
+                    });
+                }
+
+
+                socket.to(interviewRoom).emit("candidate_tab_changed", {
+                    candidateId: userId.toString(),
+                    changedAt: new Date()
+                })
+            } catch (error) {
+                socket.emit("socket_error", {
+                    event: "candidate_tab_changed",
+                    message: "failed to change tabs"
+                })
+            }
+        })
         // JOIN CONVERSATION
 
         socket.on(
