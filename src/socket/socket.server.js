@@ -6,6 +6,7 @@ import { User } from "../models/user.model.js";
 
 import { socketAuth } from "./socket.auth.js";
 import { setIo } from "./socket.manager.js";
+import { authorizeInterviewRoom } from "../services/interviewRoom.service.js";
 
 export const initializeSocket = (io) => {
     setIo(io);
@@ -25,9 +26,7 @@ export const initializeSocket = (io) => {
 
         console.log("User ID:", userId);
 
-        // ==========================================
         // JOIN PERSONAL USER ROOM
-        // ==========================================
 
         const userRoom = userId;
 
@@ -37,9 +36,8 @@ export const initializeSocket = (io) => {
             `User joined personal room: ${userRoom}`
         );
 
-        // ==========================================
+
         // ADD USER TO ONLINE USERS
-        // ==========================================
 
         let isFirstConnection = false;
 
@@ -60,9 +58,7 @@ export const initializeSocket = (io) => {
             )
         );
 
-        // ==========================================
         // UPDATE USER ONLINE STATUS
-        // ==========================================
 
         if (isFirstConnection) {
             try {
@@ -75,18 +71,14 @@ export const initializeSocket = (io) => {
             }
         }
 
-        // ==========================================
         // TELL THIS USER WHO IS ONLINE
-        // ==========================================
 
         socket.emit("online_users", {
             userIds: [...onlineUsers.keys()],
         });
 
-        // ==========================================
         // TELL OTHER USERS THIS USER IS ONLINE
         // ONLY FIRST CONNECTION
-        // ==========================================
 
         if (isFirstConnection) {
             socket.broadcast.emit("user_online", {
@@ -94,9 +86,52 @@ export const initializeSocket = (io) => {
             });
         }
 
-        // ==========================================
+        // JOIN INTERVIEW
+
+        socket.on("join_interview", async ({ interviewRoomId }) => {
+            try {
+                if (!interviewRoomId) {
+                    socket.emit("interview_error", {
+                        message: "interview RoomId is required"
+                    });
+
+                    return;
+                }
+
+                const userId = socket.user._id;
+
+                const interview = await authorizeInterviewRoom({
+                    interviewRoomId,
+                    userId
+                })
+
+                const roomName = `interview:${interview.interviewRoomId}`;
+
+                socket.join(roomName);
+
+                const isCandidate = interview.candidate.toString() === userId.toString();
+
+                const role = isCandidate ? "candidate" : "recruiter";
+
+                socket.emit("interview_joined", {
+                    interviewId: interview._id,
+                    interviewRoomId: interview.interviewRoomId,
+                    role
+                });
+
+                socket.io(roomName).emit("interview_user_joined", {
+                    userId,
+                    role
+                });
+
+            } catch (error) {
+                socket.emit("interview_error", {
+                    message: error.message
+                })
+            }
+        })
+
         // JOIN CONVERSATION
-        // ==========================================
 
         socket.on(
             "join_conversation",
@@ -229,9 +264,7 @@ export const initializeSocket = (io) => {
             }
         );
 
-        // ==========================================
         // SEND MESSAGE
-        // ==========================================
 
         socket.on(
             "send_message",
@@ -431,264 +464,259 @@ export const initializeSocket = (io) => {
                 }
             }
         );
-        
-        //==c=
-        // ==========================================
-// SEND FILE MESSAGE
-// ==========================================
 
-socket.on(
-    "send_file_message",
-    async (data) => {
-        try {
-            const {
-                conversationId,
-                attachment,
-            } = data || {};
+        // SEND FILE MESSAGE
 
-            // ==========================================
-            // VALIDATE CONVERSATION
-            // ==========================================
-
-            if (!conversationId) {
-                return socket.emit(
-                    "message_error",
-                    {
-                        success: false,
-                        message:
-                            "Conversation ID is required",
-                    }
-                );
-            }
-
-            if (
-                !mongoose.Types.ObjectId.isValid(
-                    conversationId
-                )
-            ) {
-                return socket.emit(
-                    "message_error",
-                    {
-                        success: false,
-                        message:
-                            "Invalid conversation ID",
-                    }
-                );
-            }
-
-            // ==========================================
-            // VALIDATE ATTACHMENT
-            // ==========================================
-
-            if (!attachment?.url) {
-                return socket.emit(
-                    "message_error",
-                    {
-                        success: false,
-                        message:
-                            "File attachment is required",
-                    }
-                );
-            }
-
-            // ==========================================
-            // FIND CONVERSATION
-            // ==========================================
-
-            const conversation =
-                await Conversation.findById(
-                    conversationId
-                );
-
-            if (!conversation) {
-                return socket.emit(
-                    "message_error",
-                    {
-                        success: false,
-                        message:
-                            "Conversation not found",
-                    }
-                );
-            }
-
-            // ==========================================
-            // CHECK DELETED
-            // ==========================================
-
-            if (conversation.isDeleted) {
-                return socket.emit(
-                    "message_error",
-                    {
-                        success: false,
-                        message:
-                            "Conversation is deleted",
-                    }
-                );
-            }
-
-            // ==========================================
-            // CHECK PARTICIPANT
-            // ==========================================
-
-            const isParticipant =
-                conversation.participants.some(
-                    (participantId) =>
-                        participantId.toString() ===
-                        socket.user._id.toString()
-                );
-
-            if (!isParticipant) {
-                return socket.emit(
-                    "message_error",
-                    {
-                        success: false,
-                        message:
-                            "You are not a participant of this conversation",
-                    }
-                );
-            }
-
-            // ==========================================
-            // DETERMINE MESSAGE TYPE
-            // ==========================================
-
-            let messageType = "file";
-
-            const mimeType =
-                attachment.mimeType || "";
-
-            if (
-                mimeType.startsWith("image/")
-            ) {
-                messageType = "image";
-            } else if (
-                mimeType.startsWith("video/")
-            ) {
-                messageType = "video";
-            } else if (
-                mimeType.startsWith("audio/")
-            ) {
-                messageType = "audio";
-            } else if (
-                mimeType ===
-                    "application/pdf" ||
-                mimeType.includes("word") ||
-                mimeType.includes("document")
-            ) {
-                messageType = "document";
-            }
-
-            // ==========================================
-            // CREATE MESSAGE
-            // ==========================================
-
-            const message =
-                await Message.create({
-                    conversation:
+        socket.on(
+            "send_file_message",
+            async (data) => {
+                try {
+                    const {
                         conversationId,
+                        attachment,
+                    } = data || {};
 
-                    sender:
-                        socket.user._id,
+                    // ==========================================
+                    // VALIDATE CONVERSATION
+                    // ==========================================
 
-                    content: "",
+                    if (!conversationId) {
+                        return socket.emit(
+                            "message_error",
+                            {
+                                success: false,
+                                message:
+                                    "Conversation ID is required",
+                            }
+                        );
+                    }
 
-                    messageType,
+                    if (
+                        !mongoose.Types.ObjectId.isValid(
+                            conversationId
+                        )
+                    ) {
+                        return socket.emit(
+                            "message_error",
+                            {
+                                success: false,
+                                message:
+                                    "Invalid conversation ID",
+                            }
+                        );
+                    }
 
-                    attachments: [
+                    // ==========================================
+                    // VALIDATE ATTACHMENT
+                    // ==========================================
+
+                    if (!attachment?.url) {
+                        return socket.emit(
+                            "message_error",
+                            {
+                                success: false,
+                                message:
+                                    "File attachment is required",
+                            }
+                        );
+                    }
+
+                    // ==========================================
+                    // FIND CONVERSATION
+                    // ==========================================
+
+                    const conversation =
+                        await Conversation.findById(
+                            conversationId
+                        );
+
+                    if (!conversation) {
+                        return socket.emit(
+                            "message_error",
+                            {
+                                success: false,
+                                message:
+                                    "Conversation not found",
+                            }
+                        );
+                    }
+
+                    // ==========================================
+                    // CHECK DELETED
+                    // ==========================================
+
+                    if (conversation.isDeleted) {
+                        return socket.emit(
+                            "message_error",
+                            {
+                                success: false,
+                                message:
+                                    "Conversation is deleted",
+                            }
+                        );
+                    }
+
+                    // ==========================================
+                    // CHECK PARTICIPANT
+                    // ==========================================
+
+                    const isParticipant =
+                        conversation.participants.some(
+                            (participantId) =>
+                                participantId.toString() ===
+                                socket.user._id.toString()
+                        );
+
+                    if (!isParticipant) {
+                        return socket.emit(
+                            "message_error",
+                            {
+                                success: false,
+                                message:
+                                    "You are not a participant of this conversation",
+                            }
+                        );
+                    }
+
+                    // ==========================================
+                    // DETERMINE MESSAGE TYPE
+                    // ==========================================
+
+                    let messageType = "file";
+
+                    const mimeType =
+                        attachment.mimeType || "";
+
+                    if (
+                        mimeType.startsWith("image/")
+                    ) {
+                        messageType = "image";
+                    } else if (
+                        mimeType.startsWith("video/")
+                    ) {
+                        messageType = "video";
+                    } else if (
+                        mimeType.startsWith("audio/")
+                    ) {
+                        messageType = "audio";
+                    } else if (
+                        mimeType ===
+                        "application/pdf" ||
+                        mimeType.includes("word") ||
+                        mimeType.includes("document")
+                    ) {
+                        messageType = "document";
+                    }
+
+                    // ==========================================
+                    // CREATE MESSAGE
+                    // ==========================================
+
+                    const message =
+                        await Message.create({
+                            conversation:
+                                conversationId,
+
+                            sender:
+                                socket.user._id,
+
+                            content: "",
+
+                            messageType,
+
+                            attachments: [
+                                {
+                                    url:
+                                        attachment.url,
+
+                                    publicId:
+                                        attachment.publicId ||
+                                        null,
+
+                                    fileName:
+                                        attachment.fileName ||
+                                        null,
+
+                                    originalName:
+                                        attachment.originalName ||
+                                        null,
+
+                                    mimeType:
+                                        attachment.mimeType ||
+                                        null,
+
+                                    extension:
+                                        attachment.extension ||
+                                        null,
+
+                                    size:
+                                        attachment.size ||
+                                        0,
+                                },
+                            ],
+                        });
+
+                    // ==========================================
+                    // UPDATE LAST MESSAGE
+                    // ==========================================
+
+                    conversation.lastMessage =
+                        message._id;
+
+                    conversation.lastMessageAt =
+                        new Date();
+
+                    await conversation.save();
+
+                    // ==========================================
+                    // POPULATE SENDER
+                    // ==========================================
+
+                    const populatedMessage =
+                        await Message.findById(
+                            message._id
+                        ).populate(
+                            "sender",
+                            "name username email avatar avatarUrl profileImage profilePicture photo"
+                        );
+
+                    // ==========================================
+                    // EMIT TO CONVERSATION
+                    // ==========================================
+
+                    io.to(
+                        conversationId.toString()
+                    ).emit(
+                        "new_message",
                         {
-                            url:
-                                attachment.url,
+                            success: true,
+                            message:
+                                populatedMessage,
+                        }
+                    );
 
-                            publicId:
-                                attachment.publicId ||
-                                null,
+                    console.log(
+                        `File message sent: ${message._id}`
+                    );
+                } catch (error) {
+                    console.error(
+                        "SEND FILE MESSAGE ERROR:",
+                        error
+                    );
 
-                            fileName:
-                                attachment.fileName ||
-                                null,
-
-                            originalName:
-                                attachment.originalName ||
-                                null,
-
-                            mimeType:
-                                attachment.mimeType ||
-                                null,
-
-                            extension:
-                                attachment.extension ||
-                                null,
-
-                            size:
-                                attachment.size ||
-                                0,
-                        },
-                    ],
-                });
-
-            // ==========================================
-            // UPDATE LAST MESSAGE
-            // ==========================================
-
-            conversation.lastMessage =
-                message._id;
-
-            conversation.lastMessageAt =
-                new Date();
-
-            await conversation.save();
-
-            // ==========================================
-            // POPULATE SENDER
-            // ==========================================
-
-            const populatedMessage =
-                await Message.findById(
-                    message._id
-                ).populate(
-                    "sender",
-                    "name username email avatar avatarUrl profileImage profilePicture photo"
-                );
-
-            // ==========================================
-            // EMIT TO CONVERSATION
-            // ==========================================
-
-            io.to(
-                conversationId.toString()
-            ).emit(
-                "new_message",
-                {
-                    success: true,
-                    message:
-                        populatedMessage,
+                    socket.emit(
+                        "message_error",
+                        {
+                            success: false,
+                            message:
+                                "Failed to send file message",
+                        }
+                    );
                 }
-            );
+            }
+        );
 
-            console.log(
-                `File message sent: ${message._id}`
-            );
-        } catch (error) {
-            console.error(
-                "SEND FILE MESSAGE ERROR:",
-                error
-            );
-
-            socket.emit(
-                "message_error",
-                {
-                    success: false,
-                    message:
-                        "Failed to send file message",
-                }
-            );
-        }
-    }
-);
-
-        // ==========================================
         // MESSAGE DELIVERED
-        // ==========================================
 
         socket.on(
             "message_delivered",
@@ -872,9 +900,7 @@ socket.on(
             }
         );
 
-        // ==========================================
         // MESSAGE READ / SEEN
-        // ==========================================
 
         socket.on(
             "message_read",
@@ -1058,9 +1084,7 @@ socket.on(
             }
         );
 
-        // ==========================================
         // TYPING START
-        // ==========================================
 
         socket.on(
             "typing_start",
@@ -1103,9 +1127,7 @@ socket.on(
             }
         );
 
-        // ==========================================
         // TYPING STOP
-        // ==========================================
 
         socket.on(
             "typing_stop",
@@ -1148,9 +1170,7 @@ socket.on(
             }
         );
 
-        // ==========================================
         // EDIT MESSAGE
-        // ==========================================
 
         socket.on(
             "edit_message",
@@ -1313,9 +1333,9 @@ socket.on(
                                 String(
                                     participantId
                                 ) ===
-                                    String(
-                                        currentUserId
-                                    )
+                                String(
+                                    currentUserId
+                                )
                         );
 
                     if (!isParticipant) {
@@ -1399,9 +1419,7 @@ socket.on(
             }
         );
 
-        // ==========================================
         // DELETE MESSAGE
-        // ==========================================
 
         socket.on(
             "delete_message",
@@ -1501,9 +1519,7 @@ socket.on(
             }
         );
 
-        // ==========================================
         // DISCONNECT
-        // ==========================================
 
         socket.on(
             "disconnect",
@@ -1601,9 +1617,7 @@ socket.on(
         );
     });
 
-    // ==========================================
     // UPDATE USER ONLINE
-    // ==========================================
 
     async function awaitUserOnline(userId) {
         const now = new Date();
