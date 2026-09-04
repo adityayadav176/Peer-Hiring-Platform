@@ -9,6 +9,7 @@ import { Job } from "../models/job.model.js"
 import { Application } from "../models/application.model.js"
 import { Interview } from "../models/interview.model.js"
 import mongoose from "mongoose"
+import { generateInterviewRoomId } from "../utils/interviewRoom.js"
 
 const scheduleInterview = asyncHandler(async (req, res) => {
     const recruiterId = req.user._id;
@@ -67,10 +68,14 @@ const scheduleInterview = asyncHandler(async (req, res) => {
     const candidateDoc = await User.findById(candidate);
 
     if (!candidateDoc) {
-        throw new ApiError(404, "Canidate Not Found");
+        throw new ApiError(404, "Candidate Not Found");
     }
 
     const interviewDate = new Date(scheduledAt);
+
+    if (Number.isNaN(interviewDate.getTime())) {
+        throw new ApiError(400, "Invalid Scheduled Date");
+    }
 
     if (interviewDate <= new Date()) {
         throw new ApiError(400, "Interview Must be scheduled in the future");
@@ -92,6 +97,11 @@ const scheduleInterview = asyncHandler(async (req, res) => {
         throw new ApiError(409, "Interview For this Round already exists");
     }
 
+    const interviewRoomId =
+        interviewType === "Online"
+            ? generateInterviewRoomId()
+            : null;
+
     const interview = await Interview.create({
         application,
         job,
@@ -100,8 +110,8 @@ const scheduleInterview = asyncHandler(async (req, res) => {
         recruiter: recruiterId,
         round: round || 1,
         interviewType,
+        interviewRoomId,
         location: interviewType === "Offline" ? location.trim() : undefined,
-
         scheduledAt: interviewDate,
         duration: duration || 60,
         timezone: timezone || "Asia/Kolkata"
@@ -185,24 +195,24 @@ const getMyInterviews = asyncHandler(async (req, res) => {
 })
 
 const rescheduleInterview = asyncHandler(async (req, res) => {
-    const {interviewId} = req.params;
-    const {scheduledAt} = req.body;
+    const { interviewId } = req.params;
+    const { scheduledAt } = req.body;
 
-    if(!interviewId) {
+    if (!interviewId) {
         throw new ApiError(400, "Interview ID is required");
     }
 
-    if(!scheduledAt) {
+    if (!scheduledAt) {
         throw new ApiError(400, "New interview date & time is required");
     }
 
     const interview = await Interview.findById(interviewId);
 
-    if(!interview) {
+    if (!interview) {
         throw new ApiError(404, "Interview Not Found");
     }
 
-    if(interview.recruiter.toString() !== req.user._id.toString()) {
+    if (interview.recruiter.toString() !== req.user._id.toString()) {
         throw new ApiError(403, "Only recruiter can reschedule interview");
     }
 
@@ -217,31 +227,31 @@ const rescheduleInterview = asyncHandler(async (req, res) => {
 })
 
 const updateInterviewStatus = asyncHandler(async (req, res) => {
-    const {interviewId} = req.params;
-    const {status} = req.body;
+    const { interviewId } = req.params;
+    const { status } = req.body;
 
     const allowedStatus = [
-            "Scheduled",
-            "Accepted",
-            "Rejected",
-            "Completed",
-            "Cancelled",
-            "Reschedule Requested",
-            "Rescheduled",
-            "No Show"
+        "Scheduled",
+        "Accepted",
+        "Rejected",
+        "Completed",
+        "Cancelled",
+        "Reschedule Requested",
+        "Rescheduled",
+        "No Show"
     ];
 
-    if(!allowedStatus.includes(status)) {
+    if (!allowedStatus.includes(status)) {
         throw new ApiError(400, "Invalid interview status");
     }
 
     const interview = await Interview.findById(interviewId);
 
-    if(!interview) {
+    if (!interview) {
         throw new ApiError(404, "interview not found");
     }
 
-    if(interview.recruiter._id.toString() !== req.user._id.toString()) {
+    if (interview.recruiter._id.toString() !== req.user._id.toString()) {
         throw new ApiError(403, "Only recruiter can update interview status");
     }
 
@@ -249,9 +259,9 @@ const updateInterviewStatus = asyncHandler(async (req, res) => {
     await interview.save();
 
     return res.status(200)
-    .json(
-        new ApiResponse(200, interview, "Interview status Updated Successfully")
-    )
+        .json(
+            new ApiResponse(200, interview, "Interview status Updated Successfully")
+        )
 })
 
 const getUpcomingInterviews = asyncHandler(async (req, res) => {

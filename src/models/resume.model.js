@@ -47,7 +47,7 @@ const resumeSchema = new Schema({
 }, { timestamps: true });
 
 resumeSchema.index({
-    userId: 1,
+    user: 1,
     isDeleted: 1
 })
 

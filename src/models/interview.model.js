@@ -1,4 +1,4 @@
-import mongoose, {Schema} from "mongoose";
+import mongoose, { Schema } from "mongoose";
 
 const interviewSchema = new Schema({
     job: {
@@ -11,6 +11,13 @@ const interviewSchema = new Schema({
         type: Schema.Types.ObjectId,
         ref: "Company",
         required: true
+    },
+
+    interviewRoomId: {
+        type: String,
+        unique: true,
+        sparse: true,
+        default: null
     },
 
     application: {
@@ -89,11 +96,11 @@ const interviewSchema = new Schema({
         enum: ["Hire", "Reject", "Hold"]
     },
 
-    canellationReason: String,
+    cancellationReason: String,
 
     rescheduleReason: String,
 
     completedAt: Date
-}, {timestamps: true})
+}, { timestamps: true })
 
 export const Interview = mongoose.model("Interview", interviewSchema);
