@@ -310,6 +310,55 @@ export const initializeSocket = (io) => {
                 })
             }
         })
+
+        
+        // ACCEPT CALL
+
+        socket.on("interview_accepted", async (data) => {
+            try {
+                const { interviewRoomId } = data || {};
+
+                if (!interviewRoomId) {
+                    socket.emit("socket_error", {
+                        event: "interview_accepted",
+                        message: "interview Room ID is required"
+                    })
+                }
+
+                const userId = socket.user._id;
+
+                const interview = await authorizeInterviewRoom({
+                    interviewRoomId,
+                    userId
+                })
+
+                const interviewRoom = `interview:${interview.interviewRoomId.toString()}`;
+
+                if (!socket.rooms.has(interviewRoom)) {
+                    socket.emit("socket_error", {
+                        event: "interview_accepted",
+                        message: "You have not joined this room"
+                    })
+                }
+
+                const role = interview.candidate.toString() === userId.toString() ? "candidate" : "recruiter";
+
+                socket.to(interviewRoom).emit("interview_call_accepted", {
+                    interviewRoomId: interview.interviewRoomId,
+                    interviewId: interview._id,
+                    acceptedBy: userId.toString(),
+                    acceptedByRole: role
+                });
+            } catch (error) {
+                console.error("interview accept error:", error);
+
+                socket.emit("socket_error", {
+                    event: "interview_accepted",
+                    message: "Failed to accept interview call"
+                })
+            }
+        })
+
         // JOIN CONVERSATION
 
         socket.on(
