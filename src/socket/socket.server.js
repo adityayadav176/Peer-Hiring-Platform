@@ -359,6 +359,50 @@ export const initializeSocket = (io) => {
             }
         })
 
+                // DECLIEND CALL
+
+        socket.on("interview_rejected", async (data) => {
+            try {
+                const { interviewRoomId } = data || {};
+
+                if (!interviewRoomId) {
+                    socket.emit("socket_error", {
+                        event: "interview_rejected",
+                        message: "Interview Room Id Is required"
+                    })
+                }
+
+                const userId = socket.user._id;
+
+                const interview = await authorizeInterviewRoom({
+                    interviewRoomId,
+                    userId
+                })
+
+                const interviewRoom = `interview:${interviewRoomId.interviewRoomId.toString()}`;
+
+                if (!socket.rooms.has(interviewRoom)) {
+                    socket.emit("socket_error", {
+                        event: "interview_rejected",
+                        message: "You have not joined this room"
+                    })
+                }
+
+                socket.to(interviewRoom).emit("interview_call_rejected", {
+                    interviewRoomId: interview.interviewRoomId,
+                    interviewId: interview._id,
+                    rejectedBy: userId.toString(),
+                    reason: reason || "Call Rejected"
+                })
+            } catch (error) {
+                console.error("interview_rejected error: ", error.message);
+
+                socket.emit("socket_error", {
+                    event: "interview_rejected",
+                    message: "Failed to reject interview call"
+                })
+            }
+        })
         // JOIN CONVERSATION
 
         socket.on(
