@@ -131,6 +131,50 @@ export const initializeSocket = (io) => {
             }
         })
 
+         // WEBRTC OFFER
+
+        socket.on("offer", async (data) => {
+            try {
+                const { interviewRoomId, offer } = data || {};
+
+                if (!interviewRoomId || !offer) {
+                    return socket.emit("socket_error", {
+                        event: "offer",
+                        message: "Interview ID and offer are required"
+                    })
+                }
+
+                const userId = socket.user._id;
+
+                const interview = await authorizeInterviewRoom({
+                    interviewRoomId,
+                    userId
+                });
+
+                const interviewRoom = `interview:${interview.interviewRoomId.toString()}`;
+
+                if (!socket.rooms.has(interviewRoom)) {
+                    return socket.emit("socket_error", {
+                        event: "offer",
+                        message: "you have not joined this interview"
+                    })
+                };
+
+                socket.to(interviewRoom).emit("offer", {
+                    userId: userId.toString(),
+                    offer
+                });
+
+                console.log(`WebRTC offer sent by ${userId} in ${interviewRoom}`);
+            } catch (error) {
+                console.error("webRTC offer error: ", error.message);
+
+                socket.emit("socket_error", {
+                    event: "offer",
+                    message: "Failed to send webRTC offer"
+                })
+            }
+        })
         // JOIN CONVERSATION
 
         socket.on(
