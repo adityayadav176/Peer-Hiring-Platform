@@ -175,6 +175,51 @@ export const initializeSocket = (io) => {
                 })
             }
         })
+
+        
+
+        // WEBRTC ANSWER
+
+        socket.on("answer", async (data) => {
+            try {
+                const { interviewRoomId, answer } = data || {};
+
+                if (!interviewRoomId || !answer) {
+                    socket.emit("socket_error", {
+                        event: "answer",
+                        message: "InterviewRoomId or Answer is required"
+                    })
+                }
+
+                const userId = socket.user_id;
+
+                const interview = await authorizeInterviewRoom({
+                    interviewRoomId,
+                    userId
+                });
+
+                const interviewRoom = `interview:${interview.interviewRoomId.toString()}`;
+
+                if (!socket.rooms.has(interviewRoom)) {
+                    socket.emit("socket_error", {
+                        event: "answer",
+                        message: "You have not joined this interview"
+                    })
+                };
+
+                socket.to(interviewRoom).emit("answer", {
+                    userId: userId.toString(),
+                    answer
+                });
+
+                console.log(`webRTC answer sent by: ${userId} in ${interviewRoom}`);
+            } catch (error) {
+                console.error("socket_error", {
+                    event: "answer",
+                    message: "Failed to send webRTC answer"
+                })
+            }
+        })
         // JOIN CONVERSATION
 
         socket.on(
