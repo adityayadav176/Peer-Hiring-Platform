@@ -447,6 +447,50 @@ export const initializeSocket = (io) => {
                 })
             }
         })
+
+                // MICROPHONE TOGGLED 
+
+        socket.on("microphone_toggled", async (data) => {
+            try {
+                const { interviewRoomId, enabled } = data || {};
+
+                if (!interviewRoomId || !typeof enabled === "boolean") {
+                    socket.emit("socket_error", {
+                        event: "microphone_toggled",
+                        message: "InterviewRoomID or microphone status is required"
+                    })
+                }
+
+                const userId = socket.user._id;
+
+                const interview = await authorizeInterviewRoom({
+                    interviewRoomId,
+                    userId
+                })
+
+                const interviewRoom = `interview:${interview.interviewRoomId.toString()}`;
+
+                if (!socket.rooms.has(interviewRoom)) {
+                    socket.emit("socket_error", {
+                        event: "socket_error",
+                        message: "You have not joined this room"
+                    });
+                };
+
+                socket.to(interviewRoom).emit("remote_microphone_toggled", {
+                    userId: userId.toString(),
+                    enabled,
+                })
+
+            } catch (error) {
+                console.error("Microphone toggle Error: ", error.message);
+
+                socket.emit("socket_error", {
+                    event: "microphone_toggled",
+                    message: "Failed To toggle microphone"
+                })
+            }
+        })
         // JOIN CONVERSATION
 
         socket.on(
