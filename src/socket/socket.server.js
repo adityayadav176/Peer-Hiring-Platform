@@ -680,6 +680,59 @@ export const initializeSocket = (io) => {
                 });
             }
         });
+
+             // LEAVE INTERVIEW
+
+        socket.on("leave_interview", async (data) => {
+            try {
+                const { interviewRoomId } = data || {};
+
+                if (!interviewRoomId) {
+                    return socket.emit("socket_error", {
+                        event: "leave_interview",
+                        message: "Interview Room ID is required"
+                    });
+                }
+
+                const userId = socket.user._id;
+
+                const interview = await authorizeInterviewRoom({
+                    interviewRoomId,
+                    userId
+                });
+
+
+                const interviewRoom = `interview:${interview.interviewRoomId.toString()}`;
+
+                if (!socket.rooms.has(interviewRoom)) {
+                    return socket.emit("socket_error", {
+                        event: "leave_interview",
+                        message: "You have not joined this interview"
+                    });
+                }
+
+                const role = interview.candidate.toString() === userId.toString() ? "candidate" : "recruiter";
+
+                socket.leave(interviewRoom);
+
+                socket.to(interviewRoom).emit("interview_user_left", {
+                    userId: userId.toString(),
+                    role
+                })
+
+                socket.emit("interview_left", {
+                    success: true,
+                    interviewRoomId: interview.interviewRoomId
+                });
+            } catch (error) {
+                console.error("Leave interview Error:", error.message);
+
+                socket.emit("socket_error", {
+                    event: "leave_interview",
+                    message: "Failed to leave interview",
+                })
+            }
+        })
         // JOIN CONVERSATION
 
         socket.on(
