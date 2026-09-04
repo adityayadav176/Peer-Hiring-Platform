@@ -1,5 +1,7 @@
 import Redis from "ioredis";
 
+console.log(process.env.REDIS_URL);
+
 const redisConnection = new Redis(process.env.REDIS_URL, {
     maxRetriesPerRequest: null
 })

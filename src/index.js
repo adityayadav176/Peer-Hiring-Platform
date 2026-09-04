@@ -8,6 +8,7 @@ import cluster from "cluster";
 import http from "http";
 import { Server } from "socket.io"
 import { initializeSocket } from "./socket/socket.server.js";
+import "./services/notification.worker.js";
 
 dotenv.config();
 
