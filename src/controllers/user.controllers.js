@@ -9,14 +9,12 @@ import bcrypt from "bcrypt";
 import cloudinary from "cloudinary";
 import { OAuth2Client } from "google-auth-library";
 import crypto from "crypto";
-import axios, { AxiosError } from "axios";
 import speakeasy from "speakeasy";
 import QRCode from "qrcode";
 import JWT from "jsonwebtoken";
 import { UAParser } from "ua-parser-js";
 import { Session } from "../models/session.model.js";
 import { deleteFromCloudinary } from "../utils/cloudinary.js";
-import mongoose from "mongoose";
 import Admin from "../models/admin.model.js";
 
 const generateAccessAndRefreshToken = async (userId, sessionId) => {
