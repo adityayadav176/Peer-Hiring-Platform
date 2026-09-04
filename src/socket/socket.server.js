@@ -733,6 +733,57 @@ export const initializeSocket = (io) => {
                 })
             }
         })
+
+        
+        // END CALL
+        socket.on("call_ended", async (data) => {
+            try {
+                const { interviewRoomId, reason } = data || {};
+
+
+                if (!interviewRoomId) {
+                    return socket.emit("socket_error", {
+                        event: "call_ended",
+                        message: "Interview Room ID is required"
+                    });
+                }
+
+                const userId = socket.user._id;
+
+                const interview = await authorizeInterviewRoom({
+                    interviewRoomId,
+                    userId
+                });
+
+                const interviewRoom = `interview:${interview.interviewRoomId.toString()}`;
+
+                if (!socket.rooms.has(interviewRoom)) {
+                    return socket.emit("socket_error", {
+                        event: "call_ended",
+                        message: "You have not joined this interview"
+                    });
+                }
+
+                socket.to(interviewRoom).emit("call_ended", {
+                    endedBy: userId.toString(),
+                    reason: reason || "call ended",
+                    endedAt: new Date(),
+                })
+
+                socket.emit("call_ended", {
+                    endedBy: userId.toString(),
+                    reason: reason || "call ended",
+                    endedAt: new Date(),
+                })
+            } catch (error) {
+                console.error("call ended error: ", error.messaga);
+
+                socket.emit("socket_error", {
+                    event: "call_ended",
+                    message: "Failed to end call"
+                })
+            }
+        })
         // JOIN CONVERSATION
 
         socket.on(
