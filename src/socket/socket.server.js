@@ -628,6 +628,58 @@ export const initializeSocket = (io) => {
                 })
             }
         })
+
+                // CANDIDATE TAB RETURED
+
+        socket.on("candidate_tab_returned", async (data) => {
+            try {
+                const { interviewRoomId } = data || {};
+
+                if (!interviewRoomId) {
+                    return socket.emit("socket_error", {
+                        event: "candidate_tab_returned",
+                        message: "Interview Room ID is required"
+                    });
+                }
+
+                const userId = socket.user._id;
+
+                const interview =
+                    await authorizeInterviewRoom({
+                        interviewRoomId,
+                        userId
+                    });
+
+                if (interview.candidate.toString() !== userId.toString()) {
+                    return socket.emit("socket_error", {
+                        event: "candidate_tab_returned",
+                        message: "Only candidate can trigger this event"
+                    });
+                }
+
+                const interviewRoom = `interview:${interview.interviewRoomId.toString()}`;
+
+                if (!socket.rooms.has(interviewRoom)) {
+                    return socket.emit("socket_error", {
+                        event: "candidate_tab_returned",
+                        message: "You have not joined this interview"
+                    });
+                }
+
+                socket.to(interviewRoom).emit("candidate_tab_returned", {
+                    candidateId: userId.toString(),
+                    returnedAt: new Date()
+                });
+
+            } catch (error) {
+                console.error("Candidate tab returned error:", error.message);
+
+                socket.emit("socket_error", {
+                    event: "candidate_tab_returned",
+                    message: error.message || "Failed to detect candidate return"
+                });
+            }
+        });
         // JOIN CONVERSATION
 
         socket.on(
