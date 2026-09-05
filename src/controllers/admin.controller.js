@@ -7,7 +7,9 @@ import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { Session } from "../models/session.model.js";
+import {UserProfile} from "../models/profile.model.js"
 import { Conversation } from "../models/converstion.model.js"
+import {Resume} from "../models/resume.model.js"
 import mongoose from "mongoose";
 
 
@@ -235,7 +237,7 @@ const deleteUser = asyncHandler(async (req, res) => {
     }
 
     // Delete profile
-    await Profile.deleteMany({
+    await UserProfile.deleteMany({
         user: userId
     });
 

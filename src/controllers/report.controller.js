@@ -117,7 +117,7 @@ const resolveReport = asyncHandler(async (req, res) => {
 
     report.status = "resolved";
     report.adminNote = adminNote;
-    report.resolvedBy = req.user._id;
+    report.resolvedBy = req.admin._id;
     report.resolvedAt = new Date();
 
     await report.save();
@@ -155,7 +155,7 @@ const rejectReport = asyncHandler(async (req, res) => {
 
     report.status = "rejected";
     report.adminNote = adminNote;
-    report.resolvedBy = req.user._id;
+    report.resolvedBy = req.admin._id;
     report.resolvedAt = new Date();
 
     await report.save();

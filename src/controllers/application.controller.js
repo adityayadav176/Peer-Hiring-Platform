@@ -342,6 +342,7 @@ const deleteApplication = asyncHandler(async (req, res) => {
     );
 });
 
+
 const updateRecruiterNotes = asyncHandler(async (req, res) => {
     const { applicationId } = req.params;
     const { recruiterNotes } = req.body;

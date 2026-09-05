@@ -4,6 +4,7 @@ import { verifyUser } from "../middleware/verifyUser.middleware.js";
 const router = Router();
 
 router.post("/:jobId",verifyUser, applyForJob);
+
 router.get("/", verifyUser, getMyApplications);
 router.get(
     "/deleted",
@@ -15,7 +16,7 @@ router.patch(
     verifyUser,
     updateRecruiterNotes
 );
-router.delete(
+router.patch(
     "/:applicationId",
     verifyUser,
     deleteApplication

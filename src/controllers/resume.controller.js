@@ -342,7 +342,27 @@ const permanentlyDeleteResume = asyncHandler(async (req, res) => {
 
 const downloadResume = asyncHandler(async (req, res) => {
 
-})
+    const { resumeId } = req.params;
+
+    if (!resumeId || !mongoose.isValidObjectId(resumeId)) {
+        throw new ApiError(400, "Invalid Resume ID");
+    }
+
+    const resume = await Resume.findOne({
+        _id: resumeId,
+        isDeleted: false
+    });
+
+    if (!resume) {
+        throw new ApiError(404, "Resume Not Found");
+    }
+
+    if (!resume.resume?.url) {
+        throw new ApiError(404, "Resume File Not Found");
+    }
+
+    return res.redirect(resume.resume.url);
+});
 
 export {
     uploadResume,
@@ -353,5 +373,6 @@ export {
     setIsDefault,
     deleteResume,
     restoreResume,
-    permanentlyDeleteResume
+    permanentlyDeleteResume,
+    downloadResume
 }

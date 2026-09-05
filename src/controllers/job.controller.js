@@ -29,6 +29,10 @@ const createJob = asyncHandler(async (req, res) => {
         throw new ApiError(401, "Unauthorized");
     }
 
+    if(req.user.role !== "recruiter") {
+        throw new ApiError(403, "Only recruiter can create job");
+    }
+
     if (!mongoose.isValidObjectId(companyId)) {
         throw new ApiError(400, "Invalid Company Id");
     }
@@ -38,7 +42,22 @@ const createJob = asyncHandler(async (req, res) => {
     }
 
     const job = await Job.create({
-        title, description, companyId, recruiterId, salary, location, skills, requirements, responsibilities, workSpaceType, employmentType, experienceLevel, category, applicationDeadline, openings, status
+        title,
+        description, 
+        companyId, 
+        recruiterId, 
+        salary, 
+        location, 
+        skills, 
+        requirements, 
+        responsibilities, 
+        workSpaceType, 
+        employmentType, 
+        experienceLevel, 
+        category, 
+        applicationDeadline, 
+        openings, 
+        status
     });
 
     if (!job) {

@@ -12,7 +12,8 @@ import mongoose from "mongoose"
 import { generateInterviewRoomId } from "../utils/interviewRoom.js"
 
 const scheduleInterview = asyncHandler(async (req, res) => {
-    const recruiterId = req.user._id;
+
+    const recruiterId = req.user?._id;
 
     const {
         application,
@@ -27,24 +28,42 @@ const scheduleInterview = asyncHandler(async (req, res) => {
         timezone
     } = req.body;
 
-    if (!application || !company || !job || !candidate || !interviewType || !scheduledAt) {
+    if (!recruiterId || !mongoose.isValidObjectId(recruiterId)) {
+        throw new ApiError(401, "Unauthorized Access Denied");
+    }
+
+    if (
+        !application ||
+        !company ||
+        !candidate ||
+        !job ||
+        !interviewType ||
+        !scheduledAt
+    ) {
         throw new ApiError(400, "All Fields Are Required");
     }
 
-    if (!application || !mongoose.isValidObjectId(application)) {
-        throw new ApiError(400, "Invalid ApplicationId")
+    if (!mongoose.isValidObjectId(application)) {
+        throw new ApiError(400, "Invalid Application ID");
     }
 
-    if (!job || !mongoose.isValidObjectId(job)) {
-        throw new ApiError(400, "Invalid JobId")
+    if (!mongoose.isValidObjectId(company)) {
+        throw new ApiError(400, "Invalid Company ID");
     }
 
-    if (!company || !mongoose.isValidObjectId(company)) {
-        throw new ApiError(400, "Invalid CompanyId")
+    if (!mongoose.isValidObjectId(candidate)) {
+        throw new ApiError(400, "Invalid Candidate ID");
     }
 
-    if (!candidate || !mongoose.isValidObjectId(candidate)) {
-        throw new ApiError(400, "Invalid CandidateId")
+    if (!mongoose.isValidObjectId(job)) {
+        throw new ApiError(400, "Invalid Job ID");
+    }
+
+    if (recruiterId.toString() === candidate.toString()) {
+        throw new ApiError(
+            403,
+            "Recruiter Cannot Schedule an Interview for Himself"
+        );
     }
 
     const applicationDoc = await Application.findById(application);
@@ -71,6 +90,54 @@ const scheduleInterview = asyncHandler(async (req, res) => {
         throw new ApiError(404, "Candidate Not Found");
     }
 
+    const recruiterBelongsToCompany = companyDoc.recruiters.some(
+        recruiter =>
+            recruiter.recruiterId.toString() === recruiterId.toString()
+    );
+
+    if (!recruiterBelongsToCompany) {
+        throw new ApiError(
+            403,
+            "You Are Not Authorized to Schedule Interviews for This Company"
+        );
+    }
+
+    if (
+        !jobDoc.companyId ||
+        jobDoc.companyId.toString() !== company.toString()
+    ) {
+        throw new ApiError(
+            403,
+            "This Job Does Not Belong to This Company"
+        );
+    }
+
+    if (
+        !applicationDoc.job ||
+        applicationDoc.job.toString() !== job.toString()
+    ) {
+        throw new ApiError(
+            400,
+            "This Application Does Not Belong to This Job"
+        );
+    }
+
+    if (
+        !applicationDoc.candidate ||
+        applicationDoc.candidate.toString() !== candidate.toString()
+    ) {
+        throw new ApiError(
+            400,
+            "This Application Does Not Belong to This Candidate"
+        );
+    }
+
+    const allowedInterviewTypes = ["Online", "Offline"];
+
+    if (!allowedInterviewTypes.includes(interviewType)) {
+        throw new ApiError(400, "Invalid Interview Type");
+    }
+
     const interviewDate = new Date(scheduledAt);
 
     if (Number.isNaN(interviewDate.getTime())) {
@@ -78,23 +145,52 @@ const scheduleInterview = asyncHandler(async (req, res) => {
     }
 
     if (interviewDate <= new Date()) {
-        throw new ApiError(400, "Interview Must be scheduled in the future");
+        throw new ApiError(
+            400,
+            "Interview Must Be Scheduled in the Future"
+        );
     }
 
-    if (interviewType === "Offline" && (!location || !location.trim())) {
-        throw new ApiError(400, "Location Required For Offline Interview");
+    if (
+        interviewType === "Offline" &&
+        (!location || !location.trim())
+    ) {
+        throw new ApiError(
+            400,
+            "Location Required for Offline Interview"
+        );
     }
+
+    if (
+        interviewType === "Online" &&
+        location &&
+        location.trim()
+    ) {
+        throw new ApiError(
+            400,
+            "Online Interview Cannot Have a Physical Location"
+        );
+    }
+
+    const interviewRound = round || 1;
 
     const existingInterview = await Interview.findOne({
         application,
-        round: round || 1,
+        round: interviewRound,
         status: {
-            $in: ["Scheduled", "Accepted", "Rescheduled"]
+            $in: [
+                "Scheduled",
+                "Accepted",
+                "Rescheduled"
+            ]
         }
     });
 
     if (existingInterview) {
-        throw new ApiError(409, "Interview For this Round already exists");
+        throw new ApiError(
+            409,
+            "Interview for This Round Already Exists"
+        );
     }
 
     const interviewRoomId =
@@ -108,20 +204,26 @@ const scheduleInterview = asyncHandler(async (req, res) => {
         company,
         candidate,
         recruiter: recruiterId,
-        round: round || 1,
+        round: interviewRound,
         interviewType,
         interviewRoomId,
-        location: interviewType === "Offline" ? location.trim() : undefined,
+        location:
+            interviewType === "Offline"
+                ? location.trim()
+                : undefined,
         scheduledAt: interviewDate,
         duration: duration || 60,
         timezone: timezone || "Asia/Kolkata"
     });
 
-    return res.status(201)
-        .json(
-            new ApiResponse(201, interview, "Interview Scheduled successfully")
+    return res.status(201).json(
+        new ApiResponse(
+            201,
+            interview,
+            "Interview Scheduled Successfully"
         )
-})
+    );
+});
 
 const getInterviewById = asyncHandler(async (req, res) => {
     const { interviewId } = req.params;

@@ -115,7 +115,8 @@ router.patch(
 router.get(
     "/jobs", 
     adminAuth, 
-    getAllJobs);
+    getAllJobs
+);
 
 router.get(
     "/jobs/:jobId",
@@ -133,6 +134,6 @@ router.delete(
     "/jobs/:jobId", 
     adminAuth,
      deleteJob
-    );
+);
 
 export default router;

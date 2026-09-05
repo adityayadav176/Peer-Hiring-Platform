@@ -117,12 +117,6 @@ const logoutSpecificDevice = asyncHandler(async (req, res) => {
         throw new ApiError(404, "Session Not Found");
     }
 
-    const cookieOption = {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "strict",
-    };
-
     return res.status(200)
         .json(
             new ApiResponse(200, {}, "Device Logged Out Successfully")

@@ -43,7 +43,8 @@ const registerUser = asyncHandler(async (req, res) => {
         name,
         email,
         password,
-        phoneNo
+        phoneNo,
+        role
     } = req.body;
 
     // ==============================
@@ -54,7 +55,7 @@ const registerUser = asyncHandler(async (req, res) => {
         !name?.trim() ||
         !email?.trim() ||
         !password?.trim() ||
-        !phoneNo?.trim()
+        !phoneNo?.trim() 
     ) {
         throw new ApiError(
             400,
@@ -158,6 +159,8 @@ const registerUser = asyncHandler(async (req, res) => {
         email: normalizedEmail,
 
         password,
+
+        role,
 
         phoneNo: normalizedPhone,
 
@@ -479,7 +482,7 @@ const loginUser = asyncHandler(async (req, res) => {
         req.headers["user-agent"] || "";
 
     const session = await Session.create({
-        user: user._id,
+        userId: user._id,
 
         device: deviceInfo.device || "Unknown",
 
@@ -551,7 +554,7 @@ const loginUser = asyncHandler(async (req, res) => {
     try {
 
         await transporter.sendMail({
-            from: process.env.SMTP_FROM,
+            from: process.env.SENDER_EMAIL,
             to: user.email,
             subject: "New Login Detected",
             html: `

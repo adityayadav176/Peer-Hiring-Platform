@@ -93,10 +93,20 @@ const createProfile = asyncHandler(async (req, res) => {
         profileData
     );
 
-    profile.profileCompletion = calculateProfileCompletion(profile);
+
+    const completion = calculateProfileCompletion(profile);
+
+    profile.profileCompletion = completion.score;
+
+    await profile.save();
 
     return res.status(201).json(
-        new ApiResponse(201, profile, "Profile created Successfully")
+        new ApiResponse(
+            201,
+            {
+                profile,
+                messingFields: completion.missingFields
+            }, "Profile created Successfully")
     )
 })
 
@@ -137,13 +147,22 @@ const updateProfile = asyncHandler(async (req, res) => {
     if (location !== undefined) profile.location = location;
     if (preferences !== undefined) profile.preferences = preferences;
 
-    profile.profileCompletion = calculateProfileCompletion(profile);
+    const completion = calculateProfileCompletion(profile);
+
+    profile.profileCompletion = completion.score;
 
     await profile.save();
 
     return res.status(200)
         .json(
-            new ApiResponse(200, profile, "Profile Updated Successfully")
+            new ApiResponse(
+                200,
+                {
+                    profile,
+                    profileCompletion: completion.score,
+                    messingFields: completion.missingFields
+
+                }, "Profile Updated Successfully")
         )
 })
 

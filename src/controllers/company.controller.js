@@ -23,7 +23,7 @@ const createCompany = asyncHandler(async (req, res) => {
         socialLinks,
     } = req.body;
 
-    if(!name.trim()) {
+    if (!name.trim()) {
         throw new ApiError(400, "Company name is required");
     }
 
@@ -36,7 +36,7 @@ const createCompany = asyncHandler(async (req, res) => {
     let finalSlug = slug;
     let count = 1;
 
-    while(await Company.exists({slug: finalSlug})) {
+    while (await Company.exists({ slug: finalSlug })) {
         finalSlug = `${slug}-${count++}`;
     }
 
@@ -186,22 +186,22 @@ const getAllCompanies = asyncHandler(async (req, res) => {
 const updateCompany = asyncHandler(async (req, res) => {
     const { companyId } = req.params;
 
-    if(!companyId || !mongoose.isValidObjectId(companyId)) {
+    if (!companyId || !mongoose.isValidObjectId(companyId)) {
         throw new ApiError(400, "Invalid CompanyId");
-    } 
+    }
 
     const { name, description, industry, companySize, foundedYear, headquarters } = req.body;
 
     const updateDate = {}
 
-    if(name !== undefined) updateDate.name = name;
-    if(description !== undefined) updateDate.description = description;
-    if(industry !== undefined) updateDate.industry = industry;
-    if(companySize !== undefined) updateDate.companySize = companySize;
-    if(foundedYear !== undefined) updateDate.foundedYear = foundedYear;
-    if(headquarters !== undefined) updateDate.headquarters = headquarters;
+    if (name !== undefined) updateDate.name = name;
+    if (description !== undefined) updateDate.description = description;
+    if (industry !== undefined) updateDate.industry = industry;
+    if (companySize !== undefined) updateDate.companySize = companySize;
+    if (foundedYear !== undefined) updateDate.foundedYear = foundedYear;
+    if (headquarters !== undefined) updateDate.headquarters = headquarters;
 
-    if(Object.keys(updateDate).length === 0) {
+    if (Object.keys(updateDate).length === 0) {
         throw new ApiError(400, "No fields provided for update.");
     }
 
@@ -216,14 +216,14 @@ const updateCompany = asyncHandler(async (req, res) => {
         }
     )
 
-    if(!company) {
+    if (!company) {
         throw new ApiError(404, "Company Not Found Or Company Detail Not Updated");
     }
 
     return res.status(200)
-    .json(
-        new ApiResponse(200, company, "Company Detail Updated Successfully")
-    )
+        .json(
+            new ApiResponse(200, company, "Company Detail Updated Successfully")
+        )
 })
 
 const deleteCompany = asyncHandler(async (req, res) => {
@@ -242,12 +242,6 @@ const deleteCompany = asyncHandler(async (req, res) => {
         {
             _id: companyId,
             isDeleted: false,
-            recruiters: {
-                $elemMatch: {
-                    recruiterId,
-                    role: { $in: ["OWNER", "ADMIN"] }
-                }
-            }
         },
         {
             $set: {
@@ -292,12 +286,6 @@ const permanentDeleteCompany = asyncHandler(async (req, res) => {
     const company = await Company.findOneAndDelete({
         _id: companyId,
         isDeleted: true,
-        recruiters: {
-            $elemMatch: {
-                recruiterId,
-                role: "OWNER",
-            },
-        },
     });
 
     if (!company) {
@@ -310,7 +298,7 @@ const permanentDeleteCompany = asyncHandler(async (req, res) => {
     return res.status(200).json(
         new ApiResponse(
             200,
-            company,
+            {},
             "Company permanently deleted successfully."
         )
     );
@@ -332,12 +320,6 @@ const restoreCompany = asyncHandler(async (req, res) => {
         {
             _id: companyId,
             isDeleted: true,
-            recruiters: {
-                $elemMatch: {
-                    recruiterId,
-                    role: { $in: ["OWNER", "ADMIN"] }
-                }
-            }
         },
         {
             $set: {
