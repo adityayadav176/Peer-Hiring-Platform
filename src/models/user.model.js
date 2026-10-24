@@ -108,7 +108,7 @@ const UserSchema = new Schema({
     },
     accountStatus: {
         type: String,
-        enum: ["active", "blocked", "deleted"],
+        enum: ["active", "blocked"],
         default: "active"
     },
     refreshToken: {
@@ -158,7 +158,7 @@ UserSchema.methods.generateAccessToken = function (sessionId) {
         },
         process.env.ACCESS_TOKEN_SECRET,
         {
-            expiresIn: process.env.ACCESS_TOKEN_EXPIRY
+            expiresIn: process.env.ACCESS_TOKEN_EXPIRY || "7d"
         }
     );
 };
@@ -172,7 +172,7 @@ UserSchema.methods.generateRefreshToken = function (sessionId) {
         },
         process.env.REFRESH_TOKEN_SECRET,
         {
-            expiresIn: process.env.REFRESH_TOKEN_EXPIRY
+            expiresIn: process.env.REFRESH_TOKEN_EXPIRY || "30d"
         }
     );
 };

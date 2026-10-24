@@ -1,79 +1,115 @@
-import { Router } from "express";
+
+import express from "express";
 
 import {
-    getInterviewById,
-    getInterviewsByApplication,
-    getInterviewsByJob,
-    getMyInterviews,
-    getTodayInterviews,
-    getUpcomingInterviews,
-    rescheduleInterview,
-    scheduleInterview,
-    updateInterviewStatus
+  scheduleInterview,
+  getMyInterviews,
+  getUpcomingInterviews,
+  getTodayInterviews,
+  getInterviewsByApplication,
+  getInterviewById,
+  getRecruiterInterviewStats,
+  getRecruiterInterviews,
+  getInterviewsByJob,
+  getRecruiterInterviewsByCandidate,
+  getRecruiterInterviewById,
+  rescheduleInterview,
+  updateInterviewStatus,
+  cancelRecruiterInterview,
 } from "../controllers/interview.controller.js";
 
 import { verifyUser } from "../middleware/verifyUser.middleware.js";
 import { isRecruiter } from "../middleware/recuiter.middleware.js";
+import { verifyRecruiterCompany } from "../middleware/verifyRecruiterCompany.js";
 
-const router = Router();
+const router = express.Router();
 
+// Candidate routes
+router.get("/my", verifyUser, getMyInterviews);
+router.get("/upcoming", verifyUser, getUpcomingInterviews);
+router.get("/today", verifyUser, getTodayInterviews);
+
+router.get(
+  "/application/:applicationId",
+  verifyUser,
+  getInterviewsByApplication
+);
+
+// Recruiter routes — specific routes first
 router.post(
-    "/",
-    verifyUser,
-    isRecruiter,
-    scheduleInterview
+  "/recruiter",
+  verifyUser,
+  isRecruiter,
+  verifyRecruiterCompany,
+  scheduleInterview
 );
 
 router.get(
-    "/me",
-    verifyUser,
-    getMyInterviews
+  "/recruiter/stats",
+  verifyUser,
+  isRecruiter,
+  verifyRecruiterCompany,
+  getRecruiterInterviewStats
 );
 
 router.get(
-    "/upcoming",
-    verifyUser,
-    getUpcomingInterviews
+  "/recruiter/job/:jobId",
+  verifyUser,
+  isRecruiter,
+  verifyRecruiterCompany,
+  getInterviewsByJob
 );
 
 router.get(
-    "/today",
-    verifyUser,
-    getTodayInterviews
+  "/recruiter/candidate/:candidateId",
+  verifyUser,
+  isRecruiter,
+  verifyRecruiterCompany,
+  getRecruiterInterviewsByCandidate
 );
 
 router.get(
-    "/:interviewId",
-    verifyUser,
-    getInterviewById
+  "/recruiter",
+  verifyUser,
+  isRecruiter,
+  verifyRecruiterCompany,
+  getRecruiterInterviews
+);
+
+// Recruiter interview-specific routes
+router.get(
+  "/recruiter/:interviewId",
+  verifyUser,
+  isRecruiter,
+  verifyRecruiterCompany,
+  getRecruiterInterviewById
 );
 
 router.patch(
-    "/:interviewId/reschedule",
-    verifyUser,
-    isRecruiter,
-    rescheduleInterview
+  "/recruiter/:interviewId/reschedule",
+  verifyUser,
+  isRecruiter,
+  verifyRecruiterCompany,
+  rescheduleInterview
 );
 
 router.patch(
-    "/:interviewId/status",
-    verifyUser,
-    isRecruiter,
-    updateInterviewStatus
+  "/recruiter/:interviewId/status",
+  verifyUser,
+  isRecruiter,
+  verifyRecruiterCompany,
+  updateInterviewStatus
 );
 
-router.get(
-    "/job/:jobId",
-    verifyUser,
-    isRecruiter,
-    getInterviewsByJob
+router.patch(
+  "/recruiter/:interviewId/cancel",
+  verifyUser,
+  isRecruiter,
+  verifyRecruiterCompany,
+  cancelRecruiterInterview
 );
 
-router.get(
-    "/application/:applicationId",
-    verifyUser,
-    isRecruiter,
-    getInterviewsByApplication
-);
+
+router.get("/:interviewId", verifyUser, getInterviewById);
 
 export default router;

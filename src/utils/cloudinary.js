@@ -17,30 +17,36 @@ console.log({
   api_secret: process.env.CLOUDINARY_API_SECRET ? "Loaded" : "Missing"
 });
 
-const uploadOnCloudinary = async(localFilePath) => {
-    try {
-        if(!localFilePath) {
-            throw new ApiError(400, "FilePath Required")
-        }
 
-        const response = await cloudinary.uploader.upload(localFilePath, {
-            resource_type: "auto",
-        })
 
-        if(fs.existsSync(localFilePath)) {
-            fs.unlinkSync(localFilePath);
-        }
-
-        return response;
-    } catch (error) {
-        console.log("Cloudinary Error: ", error);
-
-        if(localFilePath && fs.existsSync(localFilePath)) {
-            fs.unlinkSync(localFilePath);
-        }
-
-        return null;
+const uploadOnCloudinary = async (localFilePath) => {
+  try {
+    if (!localFilePath) {
+      throw new Error("Cloudinary upload: local file path is missing.");
     }
+
+    const result = await cloudinary.uploader.upload(localFilePath, {
+      resource_type: "image",
+      folder: "peer-hiring/companies",
+    });
+
+    if (!result?.secure_url || !result?.public_id) {
+      throw new Error("Cloudinary returned an incomplete upload result.");
+    }
+
+    return result;
+  } catch (error) {
+    console.error("Cloudinary upload failed:", error);
+    throw error;
+  } finally {
+    if (localFilePath && fs.existsSync(localFilePath)) {
+      fs.unlink(localFilePath, (error) => {
+        if (error) {
+          console.error("Failed to remove temporary upload:", error);
+        }
+      });
+    }
+  }
 };
 
 const deleteFromCloudinary = async (public_id) => {

@@ -24,7 +24,7 @@ const getMyNotificationsController = asyncHandler(async (req, res) => {
 const getUnreadNotificationCountController = asyncHandler(async(req, res) => {
   const userId = req.user._id;
   
-  const count = getUnreadNotificationCount(userId);
+  const count =  await getUnreadNotificationCount(userId);
 
   return res.status(200)
   .json(

@@ -1,5 +1,5 @@
-import { Router } from "express";
 
+import { Router } from "express";
 import {
     changeJobStatus,
     createJob,
@@ -8,35 +8,27 @@ import {
     getDeletedJobs,
     getJobById,
     getRecruiterJobs,
+    getUserJobById,
     permanentDeleteJob,
     restoreJob,
-    updateJob
+    updateJob,
 } from "../controllers/job.controller.js";
 
 import { verifyUser } from "../middleware/verifyUser.middleware.js";
 import { isRecruiter } from "../middleware/recuiter.middleware.js";
-
+import {verifyRecruiterCompany} from "../middleware/verifyRecruiterCompany.js"
 const router = Router();
 
-// Create Job
-router.post(
-    "/",
-    verifyUser,
-    isRecruiter,
-    createJob
-);
+// Public and user job routes
+router.get("/", verifyUser, getAllJobs);
+router.get("/user/:JobId", verifyUser, getUserJobById); 
 
-// Collection Routes
-router.get(
-    "/",
-    verifyUser,
-    getAllJobs
-);
-
+// Recruiter collection routes
 router.get(
     "/recruiter",
     verifyUser,
     isRecruiter,
+    verifyRecruiterCompany,
     getRecruiterJobs
 );
 
@@ -44,13 +36,25 @@ router.get(
     "/deleted",
     verifyUser,
     isRecruiter,
+    verifyRecruiterCompany,
     getDeletedJobs
 );
 
-// Single Job Routes
-router.get(
-    "/:JobId",
+// Create job
+router.post(
+    "/",
     verifyUser,
+    isRecruiter,
+    verifyRecruiterCompany,
+    createJob
+);
+
+// Recruiter single-job and update routes
+router.get(
+    "/recruiter/:JobId",
+    verifyUser,
+    isRecruiter,
+    verifyRecruiterCompany,
     getJobById
 );
 
@@ -58,28 +62,32 @@ router.patch(
     "/:JobId",
     verifyUser,
     isRecruiter,
+    verifyRecruiterCompany,
     updateJob
+);
+
+// Job actions
+router.patch(
+    "/:JobId/status",
+    verifyUser,
+    isRecruiter,
+    verifyRecruiterCompany,
+    changeJobStatus
 );
 
 router.patch(
     "/:JobId/delete",
     verifyUser,
     isRecruiter,
+    verifyRecruiterCompany,
     deleteJob
-);
-
-// Job Actions
-router.patch(
-    "/:JobId/status",
-    verifyUser,
-    isRecruiter,
-    changeJobStatus
 );
 
 router.patch(
     "/:JobId/restore",
     verifyUser,
     isRecruiter,
+    verifyRecruiterCompany,
     restoreJob
 );
 
@@ -87,6 +95,7 @@ router.delete(
     "/:JobId/permanent",
     verifyUser,
     isRecruiter,
+    verifyRecruiterCompany,
     permanentDeleteJob
 );
 

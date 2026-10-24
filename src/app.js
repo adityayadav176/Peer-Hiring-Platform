@@ -48,10 +48,10 @@ import NotificationRouter from "./routes/notification.route.js"
 app.use("/api/v1/auth", UserRouter);
 app.use("/api/v1/session", SessionRouter);
 app.use("/api/v1/job", JobRouter);
-app.use("/api/v1/company", CompanyRouter);
+app.use("/api/v1/companies", CompanyRouter);
 app.use("/api/v1/resume", ResumeRouter);
 app.use("/api/v1/profile", ProfileRouter);
-app.use("/api/v1/application", ApplicatiobRouter);
+app.use("/api/v1/applications", ApplicatiobRouter);
 app.use("/api/v1/interview", InterviewRouter);
 app.use("/api/v1/admin", AdminRouter);
 app.use("/api/v1/conversation", ConversationRouter);

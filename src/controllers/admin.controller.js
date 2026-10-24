@@ -11,88 +11,78 @@ import {UserProfile} from "../models/profile.model.js"
 import { Conversation } from "../models/converstion.model.js"
 import {Resume} from "../models/resume.model.js"
 import mongoose from "mongoose";
-
+import { Message } from "../models/message.model.js";
+import Admin from "../models/admin.model.js"
+import {uploadOnCloudinary} from "../utils/cloudinary.js"
 
 const getAllUsers = asyncHandler(async (req, res) => {
+  const {
+    page = 1,
+    limit = 10,
+    search = "",
+    role,
+    accountStatus,
+    status,
+  } = req.query;
 
-    const {
-        page = 1,
-        limit = 10,
-        search = "",
-        role,
-        status
-    } = req.query;
+  const pageNumber = Math.max(Number(page) || 1, 1);
+  const limitNumber = Math.min(
+    Math.max(Number(limit) || 10, 1),
+    100
+  );
 
-    const pageNumber = Math.max(Number(page), 1);
+  const query = {};
 
-    const limitNumber = Math.min(
-        Math.max(Number(limit), 1),
-        100
+  const searchTerm = String(search).trim();
+
+  if (searchTerm) {
+    const escapedSearch = searchTerm.replace(
+      /[.*+?^${}()|[\]\\]/g,
+      "\\$&"
     );
 
-    const query = {};
+    query.$or = [
+      { name: { $regex: escapedSearch, $options: "i" } },
+      { email: { $regex: escapedSearch, $options: "i" } },
+    ];
+  }
 
-    // Search by name or email
-    if (search.trim()) {
-        query.$or = [
-            {
-                name: {
-                    $regex: search.trim(),
-                    $options: "i"
-                }
-            },
-            {
-                email: {
-                    $regex: search.trim(),
-                    $options: "i"
-                }
-            }
-        ];
-    }
+  if (role) {
+    query.role = role;
+  }
 
-    // Filter by role
-    if (role) {
-        query.role = role;
-    }
+  const requestedStatus = accountStatus || status;
 
-    // Filter by status
-    if (status) {
-        query.status = status;
-    }
+  if (requestedStatus && requestedStatus !== "all") {
+    query.accountStatus = requestedStatus;
+  }
 
-    const skip = (pageNumber - 1) * limitNumber;
+  const skip = (pageNumber - 1) * limitNumber;
 
-    const [users, totalUsers] = await Promise.all([
+  const [users, totalUsers] = await Promise.all([
+    User.find(query)
+      .select("-password -refreshToken -otp -otpExpiredAt")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limitNumber)
+      .lean(),
 
-        User.find(query)
-            .select("-password -refreshToken -otp -otpExpiredAt")
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(limitNumber)
-            .lean(),
+    User.countDocuments(query),
+  ]);
 
-        User.countDocuments(query)
-
-    ]);
-
-    return res.status(200).json(
-        new ApiResponse(
-            200,
-            {
-                data: {
-                    users,
-                    pagination: {
-                        currentPage: pageNumber,
-                        totalPages: Math.ceil(
-                            totalUsers / limitNumber
-                        ),
-                        totalUsers,
-                        limit: limitNumber
-                    }
-                }
-            }
-        )
-    );
+  return res.status(200).json(
+    new ApiResponse(200, {
+      data: {
+        users,
+        pagination: {
+          currentPage: pageNumber,
+          totalPages: Math.ceil(totalUsers / limitNumber),
+          totalUsers,
+          limit: limitNumber,
+        },
+      },
+    })
+  );
 });
 
 const getUserById = asyncHandler(async (req, res) => {
@@ -132,92 +122,106 @@ const getUserById = asyncHandler(async (req, res) => {
 })
 
 const blockUser = asyncHandler(async (req, res) => {
-    const {userId} = req.params;
-    const {duration} = req.body;
-
-    if(!userId || !mongoose.isValidObjectId(userId)) {
-        throw new ApiError(400, "Invalid UserId");
-    }
-
-    if(!duration || !Number.isInteger(duration)) {
-        throw new ApiError(400, "Duration must be a number");
-    }
-
-    const user = await User.findById(userId);
-
-    if(!user) {
-        throw new ApiError(404, "User Not Found"); 
-    }
-
-    if(user.lockUntil && user.lockUntil > new Date()) {
-        throw new ApiError(400, "User already blocked");
-    }
-
-    const lockUntil = new Date(Date.now() + duration * 60 * 1000);
-
-    user.lockUntil = lockUntil;
-
-    user.tokenVersion += 1;
-
-    user.isOnline = false;
-    user.lastSeen = new Date();
-    user.lastSeenAt = new Date();
-
-    await user.save();
-
-    return res.status(200)
-    .json(
-        new ApiResponse(
-            200, 
-            {
-                userId: user._id,
-                lockUntil: user.lockUntil
-            },
-            "User blocked successfully"
-        )
-    )
-})
-
-const unblockUser = asyncHandler(async (req, res) => {
     const { userId } = req.params;
+    const duration = Number(req.body.duration);
 
-    // Validate user ID
-    if (!mongoose.Types.ObjectId.isValid(userId)) {
-        throw new ApiError(400, "Invalid user ID");
+    if (!userId || !mongoose.isValidObjectId(userId)) {
+        throw new ApiError(400, "Invalid User ID");
     }
 
-    // Find user
+    if (
+        !Number.isFinite(duration) ||
+        !Number.isInteger(duration) ||
+        duration <= 0
+    ) {
+        throw new ApiError(
+            400,
+            "Duration must be a positive integer in minutes"
+        );
+    }
+
     const user = await User.findById(userId);
 
     if (!user) {
         throw new ApiError(404, "User not found");
     }
 
-    // Check if user is currently blocked
-    if (!user.lockUntil || user.lockUntil <= new Date()) {
-        throw new ApiError(400, "User is not currently blocked");
+    // Reject an account that is already actively blocked.
+    if (
+        user.accountStatus === "blocked" &&
+        user.lockUntil &&
+        user.lockUntil > new Date()
+    ) {
+        throw new ApiError(400, "User is already blocked");
     }
 
-    // Remove temporary block
-    user.lockUntil = null;
+    const now = new Date();
+    const lockUntil = new Date(
+        now.getTime() + duration * 60 * 1000
+    );
 
-    // Invalidate existing tokens
-    user.tokenVersion += 1;
+    user.lockUntil = lockUntil;
+    user.accountStatus = "blocked";
+
+    // Invalidate existing access/refresh tokens.
+    user.tokenVersion = (user.tokenVersion || 0) + 1;
+
+    user.isOnline = false;
+    user.lastSeen = now;
+    user.lastSeenAt = now;
 
     await user.save();
 
-    return res
-        .status(200)
-        .json(
-            new ApiResponse(
-                200,
-                {
-                    userId: user._id,
-                    lockUntil: user.lockUntil
-                },
-                "User unblocked successfully"
-            )
-        );
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            {
+                userId: user._id,
+                accountStatus: user.accountStatus,
+                lockUntil: user.lockUntil,
+            },
+            "User blocked successfully"
+        )
+    );
+});
+
+const unblockUser = asyncHandler(async (req, res) => {
+    const { userId } = req.params;
+
+    if (!userId || !mongoose.isValidObjectId(userId)) {
+        throw new ApiError(400, "Invalid User ID");
+    }
+
+    const user = await User.findById(userId);
+
+    if (!user) {
+        throw new ApiError(404, "User not found");
+    }
+
+    // Allow unblocking an expired temporary block too.
+    if (user.accountStatus !== "blocked" && !user.lockUntil) {
+        throw new ApiError(400, "User is not currently blocked");
+    }
+
+    user.lockUntil = null;
+    user.accountStatus = "active";
+
+    // Invalidate existing tokens.
+    user.tokenVersion = (user.tokenVersion || 0) + 1;
+
+    await user.save();
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            {
+                userId: user._id,
+                accountStatus: user.accountStatus,
+                lockUntil: user.lockUntil,
+            },
+            "User unblocked successfully"
+        )
+    );
 });
 
 const deleteUser = asyncHandler(async (req, res) => {
@@ -225,7 +229,7 @@ const deleteUser = asyncHandler(async (req, res) => {
     const { userId } = req.params;
 
     // Validate user ID
-    if (!mongoose.Types.ObjectId.isValid(userId)) {
+    if (!userId || !mongoose.isValidObjectId(userId)) {
         throw new ApiError(400, "Invalid user ID");
     }
 
@@ -238,7 +242,7 @@ const deleteUser = asyncHandler(async (req, res) => {
 
     // Delete profile
     await UserProfile.deleteMany({
-        user: userId
+        userId
     });
 
     // Delete resumes
@@ -248,20 +252,20 @@ const deleteUser = asyncHandler(async (req, res) => {
 
     // Delete applications
     await Application.deleteMany({
-        applicant: userId
+        candidateId: userId
     });
 
     // Delete interviews where user is involved
     await Interview.deleteMany({
         $or: [
             { candidate: userId },
-            { interviewer: userId }
+            { recruiter: userId }
         ]
     });
 
     // Delete sessions
     await Session.deleteMany({
-        user: userId
+        userId
     });
 
     // Find conversations involving this user
@@ -400,343 +404,576 @@ const getAdminDashboardStats = asyncHandler(async (req, res) => {
 });
 
 const getAllAdminCompanies = asyncHandler(async (req, res) => {
-
     const {
         page = 1,
         limit = 10,
         search = "",
-        status
+        status = "all",
+        verificationStatus,
+        blocked = "all",
+        deleted = "all",
+        industry = "",
+        companySize = "",
+        country = "",
+        state = "",
+        city = "",
+        sortBy = "createdAt",
+        sortOrder = "desc",
     } = req.query;
 
+    // --------------------------------------------------
+    // 1. Pagination
+    // --------------------------------------------------
+    const currentPage = Math.max(1, Number(page) || 1);
 
-    // ==============================
-    // PAGINATION
-    // ==============================
-
-    const pageNumber = Math.max(Number(page), 1);
-
-    const limitNumber = Math.min(
-        Math.max(Number(limit), 1),
-        100
+    const pageLimit = Math.min(
+        100,
+        Math.max(1, Number(limit) || 10)
     );
 
-    const skip = (pageNumber - 1) * limitNumber;
+    const skip = (currentPage - 1) * pageLimit;
 
+    // --------------------------------------------------
+    // 2. Sorting
+    // --------------------------------------------------
+    const allowedSortFields = [
+        "createdAt",
+        "updatedAt",
+        "name",
+        "industry",
+        "foundedYear",
+    ];
 
-    // ==============================
-    // FILTER
-    // ==============================
+    const sortField = allowedSortFields.includes(sortBy)
+        ? sortBy
+        : "createdAt";
+
+    const sortDirection =
+        String(sortOrder).trim().toLowerCase() === "asc" ? 1 : -1;
+
+    // --------------------------------------------------
+    // 3. Helpers
+    // --------------------------------------------------
+    const escapeRegex = (value) =>
+        value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
     const filter = {};
+    const andConditions = [];
 
+    const normalizedStatus = String(status ?? "all")
+        .trim()
+        .toLowerCase();
 
-    // ==============================
-    // SEARCH
-    // ==============================
+    const normalizedBlocked = String(blocked ?? "all")
+        .trim()
+        .toLowerCase();
 
-    if (search.trim()) {
+    const normalizedDeleted = String(deleted ?? "all")
+        .trim()
+        .toLowerCase();
 
-        filter.$or = [
-            {
-                name: {
-                    $regex: search.trim(),
-                    $options: "i"
-                }
+    const normalizedVerificationInput = String(
+        verificationStatus ?? ""
+    )
+        .trim()
+        .toLowerCase();
+
+    // --------------------------------------------------
+    // 4. Search filter
+    // --------------------------------------------------
+    const searchText = String(search ?? "").trim();
+
+    if (searchText) {
+        const searchRegex = new RegExp(escapeRegex(searchText), "i");
+
+        andConditions.push({
+            $or: [
+                { name: searchRegex },
+                { description: searchRegex },
+                { industry: searchRegex },
+                { slug: searchRegex },
+            ],
+        });
+    }
+
+    // --------------------------------------------------
+    // 5. Deleted filter
+    // --------------------------------------------------
+    const deletedCondition = {
+        $or: [
+            { isDeleted: true },
+            { deletedAt: { $ne: null } },
+        ],
+    };
+
+    const notDeletedCondition = {
+        isDeleted: { $ne: true },
+        deletedAt: null,
+    };
+
+    if (normalizedDeleted === "true") {
+        andConditions.push(deletedCondition);
+    } else if (normalizedDeleted === "false") {
+        andConditions.push(notDeletedCondition);
+    } else if (normalizedDeleted !== "all") {
+        throw new ApiError(
+            400,
+            "Invalid deleted filter. Use true, false, or all."
+        );
+    }
+
+    // --------------------------------------------------
+    // 6. Company account status filter
+    // --------------------------------------------------
+    const allowedStatuses = [
+        "all",
+        "pending",
+        "verified",
+        "rejected",
+        "blocked",
+        "unblocked",
+        "active",
+        "deleted",
+    ];
+
+    if (!allowedStatuses.includes(normalizedStatus)) {
+        throw new ApiError(400, "Invalid company status");
+    }
+
+    if (normalizedStatus === "deleted") {
+        andConditions.push(deletedCondition);
+    }
+
+    if (normalizedStatus === "blocked") {
+        andConditions.push(
+            { isBlocked: true },
+            notDeletedCondition
+        );
+    }
+
+    if (
+        normalizedStatus === "unblocked" ||
+        normalizedStatus === "active"
+    ) {
+        andConditions.push(
+            { isBlocked: { $ne: true } },
+            notDeletedCondition
+        );
+    }
+
+    // --------------------------------------------------
+    // 7. Verification status filter
+    // FIX: "all" must not be treated as an invalid status.
+    // --------------------------------------------------
+    const allowedVerificationStatuses = [
+        "pending",
+        "verified",
+        "rejected",
+    ];
+
+    const selectedVerificationStatus =
+        normalizedVerificationInput &&
+        normalizedVerificationInput !== "all"
+            ? normalizedVerificationInput
+            : allowedVerificationStatuses.includes(normalizedStatus)
+                ? normalizedStatus
+                : undefined;
+
+    if (selectedVerificationStatus) {
+        if (
+            !allowedVerificationStatuses.includes(
+                selectedVerificationStatus
+            )
+        ) {
+            throw new ApiError(
+                400,
+                "Invalid verification status. Use pending, verified, rejected, or all."
+            );
+        }
+
+        andConditions.push({
+            verificationStatus: selectedVerificationStatus,
+        });
+    }
+
+    // --------------------------------------------------
+    // 8. Blocked filter
+    // --------------------------------------------------
+    if (normalizedBlocked === "true") {
+        andConditions.push({ isBlocked: true });
+    } else if (normalizedBlocked === "false") {
+        andConditions.push({ isBlocked: { $ne: true } });
+    } else if (normalizedBlocked !== "all") {
+        throw new ApiError(
+            400,
+            "Invalid blocked filter. Use true, false, or all."
+        );
+    }
+
+    // --------------------------------------------------
+    // 9. Industry filter
+    // --------------------------------------------------
+    const normalizedIndustry = String(industry ?? "").trim();
+
+    if (normalizedIndustry) {
+        andConditions.push({
+            industry: {
+                $regex: `^${escapeRegex(normalizedIndustry)}$`,
+                $options: "i",
             },
-            {
-                slug: {
-                    $regex: search.trim(),
-                    $options: "i"
-                }
-            },
-            {
-                industry: {
-                    $regex: search.trim(),
-                    $options: "i"
-                }
-            },
-            {
-                description: {
-                    $regex: search.trim(),
-                    $options: "i"
-                }
-            },
-            {
-                "headquarters.city": {
-                    $regex: search.trim(),
-                    $options: "i"
-                }
-            },
-            {
-                "headquarters.state": {
-                    $regex: search.trim(),
-                    $options: "i"
-                }
-            },
-            {
-                "headquarters.country": {
-                    $regex: search.trim(),
-                    $options: "i"
-                }
-            }
+        });
+    }
+
+    // --------------------------------------------------
+    // 10. Company size filter
+    // --------------------------------------------------
+    const normalizedCompanySize = String(companySize ?? "").trim();
+
+    if (
+        normalizedCompanySize &&
+        normalizedCompanySize.toLowerCase() !== "all"
+    ) {
+        const allowedSizes = [
+            "1-10",
+            "11-50",
+            "51-200",
+            "201-500",
+            "501-1000",
+            "1001-5000",
+            "5001-10000",
         ];
 
+        if (!allowedSizes.includes(normalizedCompanySize)) {
+            throw new ApiError(400, "Invalid company size");
+        }
+
+        andConditions.push({
+            companySize: normalizedCompanySize,
+        });
     }
 
+    // --------------------------------------------------
+    // 11. Headquarters filters
+    // --------------------------------------------------
+    const locationFilters = [
+        ["country", country],
+        ["state", state],
+        ["city", city],
+    ];
 
-    // ==============================
-    // STATUS FILTER
-    // ==============================
+    for (const [field, value] of locationFilters) {
+        const normalizedValue = String(value ?? "").trim();
 
-    if (status === "verified") {
-
-        filter.isVerified = true;
-
-    } else if (status === "unverified") {
-
-        filter.isVerified = false;
-
-    } else if (status === "blocked") {
-
-        filter.isDeleted = true;
-
-    } else if (status === "active") {
-
-        filter.isDeleted = false;
-
+        if (normalizedValue) {
+            andConditions.push({
+                [`headquarters.${field}`]: {
+                    $regex: `^${escapeRegex(normalizedValue)}$`,
+                    $options: "i",
+                },
+            });
+        }
     }
 
+    // --------------------------------------------------
+    // 12. Build MongoDB query
+    // --------------------------------------------------
+    if (andConditions.length > 0) {
+        filter.$and = andConditions;
+    }
 
-    // ==============================
-    // GET COMPANIES + COUNT
-    // ==============================
-
-    const [
-        companies,
-        totalCompanies
-    ] = await Promise.all([
-
+    // --------------------------------------------------
+    // 13. Fetch companies and matching count
+    // --------------------------------------------------
+    const [companies, totalCompanies] = await Promise.all([
         Company.find(filter)
+            .populate("recruiters.recruiterId", "name email phoneNo")
             .sort({
-                createdAt: -1
+                [sortField]: sortDirection,
+                _id: -1,
             })
             .skip(skip)
-            .limit(limitNumber)
-            .populate(
-                "recruiters.recruiterId",
-                "name email phoneNo"
-            )
+            .limit(pageLimit)
             .lean(),
 
-        Company.countDocuments(filter)
-
+        Company.countDocuments(filter),
     ]);
 
+    const totalPages = Math.ceil(totalCompanies / pageLimit);
 
-    // ==============================
-    // RESPONSE
-    // ==============================
-
+    // --------------------------------------------------
+    // 14. Response
+    // --------------------------------------------------
     return res.status(200).json(
-
         new ApiResponse(
             200,
             {
                 companies,
-
                 pagination: {
-                    currentPage: pageNumber,
-
-                    totalPages: Math.ceil(
-                        totalCompanies / limitNumber
-                    ),
-
+                    currentPage,
+                    limit: pageLimit,
                     totalCompanies,
-
-                    limit: limitNumber,
-
-                    hasNextPage:
-                        pageNumber <
-                        Math.ceil(
-                            totalCompanies / limitNumber
-                        ),
-
-                    hasPreviousPage:
-                        pageNumber > 1
-                }
+                    totalPages,
+                    hasNextPage: currentPage < totalPages,
+                    hasPrevPage: currentPage > 1,
+                },
+                filters: {
+                    search: searchText,
+                    status: normalizedStatus,
+                    verificationStatus:
+                        selectedVerificationStatus || "all",
+                    blocked: normalizedBlocked,
+                    deleted: normalizedDeleted,
+                    industry: normalizedIndustry,
+                    companySize: normalizedCompanySize,
+                    country: String(country ?? "").trim(),
+                    state: String(state ?? "").trim(),
+                    city: String(city ?? "").trim(),
+                    sortBy: sortField,
+                    sortOrder:
+                        sortDirection === 1 ? "asc" : "desc",
+                },
             },
-
-            "Admin companies fetched successfully"
+            "Companies fetched successfully"
         )
-
     );
-
 });
 
 const getCompanyById = asyncHandler(async (req, res) => {
-
     const { companyId } = req.params;
 
+    if (!mongoose.isValidObjectId(companyId)) {
+        throw new ApiError(400, "Invalid company ID");
+    }
 
     const company = await Company.findOne({
         _id: companyId,
-        isDeleted: false
     }).populate(
         "recruiters.recruiterId",
         "name email phoneNo"
     );
 
-
     if (!company) {
-
         throw new ApiError(
             404,
             "Company not found"
         );
-
     }
 
-
     return res.status(200).json(
-
         new ApiResponse(
             200,
             company,
             "Company fetched successfully"
         )
-
     );
 });
 
 const verifyCompany = asyncHandler(async (req, res) => {
-
     const { companyId } = req.params;
-
 
     const company = await Company.findOne({
         _id: companyId,
-        isDeleted: false
+        isDeleted: false,
     });
 
-
     if (!company) {
-
-        throw new ApiError(
-            404,
-            "Company not found"
-        );
-
+        throw new ApiError(404, "Company not found");
     }
 
+    if (company.isBlocked) {
+        throw new ApiError(
+            400,
+            "Unblock the company before verifying it"
+        );
+    }
 
-    if (company.isVerified) {
-
+    if (company.verificationStatus === "verified") {
         throw new ApiError(
             400,
             "Company is already verified"
         );
-
     }
 
-
     company.isVerified = true;
+    company.verificationStatus = "verified";
 
     await company.save();
 
-
     return res.status(200).json(
-
         new ApiResponse(
             200,
             company,
             "Company verified successfully"
         )
-
     );
 });
 
 const rejectCompany = asyncHandler(async (req, res) => {
-
     const { companyId } = req.params;
-
 
     const company = await Company.findOne({
         _id: companyId,
-        isDeleted: false
+        isDeleted: false,
     });
 
-
     if (!company) {
-
-        throw new ApiError(
-            404,
-            "Company not found"
-        );
-
+        throw new ApiError(404, "Company not found");
     }
 
-
-    if (!company.isVerified) {
-
+    if (company.verificationStatus === "rejected") {
         throw new ApiError(
             400,
-            "Company is already unverified"
+            "Company verification is already rejected"
         );
-
     }
 
+    if (company.verificationStatus === "verified") {
+        throw new ApiError(
+            400,
+            "Company is already verified"
+        );
+    }
 
     company.isVerified = false;
+    company.verificationStatus = "rejected";
 
     await company.save();
 
-
     return res.status(200).json(
-
         new ApiResponse(
             200,
             company,
-            "Company verification rejected successfully"
+            "Company verification request rejected successfully"
         )
-
     );
 });
 
 const blockCompany = asyncHandler(async (req, res) => {
-
     const { companyId } = req.params;
-
 
     const company = await Company.findOne({
         _id: companyId,
-        isDeleted: false
+        isDeleted: false,
     });
 
-
     if (!company) {
-
         throw new ApiError(
             404,
             "Company not found"
         );
-
     }
 
+    if (company.isBlocked) {
+        throw new ApiError(
+            400,
+            "Company is already blocked"
+        );
+    }
+
+    company.isBlocked = true;
+
+    await company.save();
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            company,
+            "Company blocked successfully"
+        )
+    );
+});
+
+const softDeleteCompany = asyncHandler(async (req, res) => {
+    const { companyId } = req.params;
+
+    if (!mongoose.isValidObjectId(companyId)) {
+        throw new ApiError(400, "Invalid company ID");
+    }
+
+    const company = await Company.findOne({
+        _id: companyId,
+        isDeleted: { $ne: true },
+        deletedAt: null,
+    });
+
+    if (!company) {
+        throw new ApiError(
+            404,
+            "Company not found or already deleted"
+        );
+    }
 
     company.isDeleted = true;
     company.deletedAt = new Date();
 
     await company.save();
 
-
     return res.status(200).json(
-
         new ApiResponse(
             200,
-            null,
-            "Company blocked successfully"
+            company,
+            "Company soft deleted successfully"
         )
+    );
+});
 
+const restoreCompany = asyncHandler(async (req, res) => {
+    const {companyId} = req.params;
+
+    if(!companyId || !mongoose.isValidObjectId(companyId)) {
+        throw new ApiError(400, "Invalid companyId");
+    }
+
+    const company = await Company.findOne({
+        _id: companyId,
+        isDeleted: true,
+    });
+
+    if(!company) {
+        throw new ApiError(404, "Company not found or not deleted");
+    }
+
+    company.isDeleted = false;
+    company.deletedAt = null;
+    await company.save();
+
+    return res.status(200).json(
+        new ApiResponse(200, company, "Company Restore Successfully")
+    )
+})
+
+const unblockCompany = asyncHandler(async (req, res) => {
+    const { companyId } = req.params;
+
+    const company = await Company.findOne({
+        _id: companyId,
+        isDeleted: false,
+    });
+
+    if (!company) {
+        throw new ApiError(
+            404,
+            "Company not found"
+        );
+    }
+
+    if (!company.isBlocked) {
+        throw new ApiError(
+            400,
+            "Company is not blocked"
+        );
+    }
+
+    company.isBlocked = false;
+
+    await company.save();
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            company,
+            "Company unblocked successfully"
+        )
     );
 });
 
@@ -801,64 +1038,88 @@ const updateUserStatus = asyncHandler(async (req, res) => {
 });
 
 const blockJob = asyncHandler(async (req, res) => {
-    const { jobId } = req.params;
+  const { jobId } = req.params;
 
-    if (!mongoose.Types.ObjectId.isValid(jobId)) {
-        throw new ApiError(400, "Invalid job ID");
-    }
+  if (!mongoose.Types.ObjectId.isValid(jobId)) {
+    throw new ApiError(400, "Invalid job ID");
+  }
 
-    const job = await Job.findById(jobId);
+  const job = await Job.findById(jobId);
 
-    if (!job) {
-        throw new ApiError(404, "Job not found");
-    }
+  if (!job) {
+    throw new ApiError(404, "Job not found");
+  }
 
-    if (job.isBlocked) {
-        throw new ApiError(400, "Job is already blocked");
-    }
+  if (job.isBlocked) {
+    throw new ApiError(400, "Job is already blocked");
+  }
 
-    job.isBlocked = true;
+  job.isBlocked = true;
 
-    await job.save({
-        validateBeforeSave: false
-    });
+  await job.save();
 
-    return res.status(200).json(
-        new ApiResponse(
-            200,
-            {
-                jobId: job._id,
-                isBlocked: job.isBlocked
-            },
-            "Job blocked successfully"
-        )
-    );
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      {
+        jobId: job._id,
+        isBlocked: job.isBlocked,
+      },
+      "Job blocked successfully"
+    )
+  );
+});
+
+const unlockJob = asyncHandler(async (req, res) => {
+  const { jobId } = req.params;
+
+  if (!mongoose.Types.ObjectId.isValid(jobId)) {
+    throw new ApiError(400, "Invalid job ID");
+  }
+
+  const job = await Job.findById(jobId);
+
+  if (!job) {
+    throw new ApiError(404, "Job not found");
+  }
+
+  if (job.isBlocked !== true) {
+    throw new ApiError(400, "Job is not blocked");
+  }
+
+  job.isBlocked = false;
+
+  await job.save();
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      job,
+      "Job unlocked successfully"
+    )
+  );
 });
 
 const deleteJob = asyncHandler(async (req, res) => {
-    const { jobId } = req.params;
+  const { jobId } = req.params;
 
-    if (!mongoose.Types.ObjectId.isValid(jobId)) {
-        throw new ApiError(400, "Invalid job ID");
-    }
+  if (!mongoose.Types.ObjectId.isValid(jobId)) {
+    throw new ApiError(400, "Invalid job ID");
+  }
 
-    const job = await Job.findById(jobId);
+  const job = await Job.findByIdAndDelete(jobId);
 
-    if (!job) {
-        throw new ApiError(404, "Job not found");
-    }
+  if (!job) {
+    throw new ApiError(404, "Job not found");
+  }
 
-    await Job.findByIdAndDelete(jobId);
-
-    return res.status(200).json(
-        new ApiResponse(
-            200,
-            {
-                jobId
-            },
-            "Job deleted successfully"
-        )
-    );
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      { jobId: job._id },
+      "Job deleted successfully"
+    )
+  );
 });
 
 const getAllJobs = asyncHandler(async (req, res) => {
@@ -907,6 +1168,7 @@ const getAllJobs = asyncHandler(async (req, res) => {
     const [jobs, totalJobs] = await Promise.all([
         Job.find(query)
             .populate("companyId")
+            .populate("recruiterId", "name email")
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limitNumber),
@@ -941,7 +1203,7 @@ const getJobById = asyncHandler(async (req, res) => {
     }
 
     const job = await Job.findById(jobId)
-        .populate("companyId");
+        .populate("companyId").populate("recruiterId" , "name email");
 
     if (!job) {
         throw new ApiError(404, "Job not found");
@@ -958,9 +1220,108 @@ const getJobById = asyncHandler(async (req, res) => {
     );
 });
 
+const updateAdminAvatar = asyncHandler(async (req, res) => {
+    const avatarLocalPath = req.file?.path;
+
+    if (!avatarLocalPath) {
+        throw new ApiError(400, "Avatar File Required");
+    }
+
+    const admin = await Admin.findOne({
+        singletonKey: "PEER_HIRING_OWNER",
+    });
+
+    if (!admin) {
+        throw new ApiError(404, "Admin Not Found");
+    }
+
+    if (!admin.isActive) {
+        throw new ApiError(403, "Admin Account Is Inactive");
+    }
+
+    const uploadAvatar = await uploadOnCloudinary(avatarLocalPath);
+
+    if (!uploadAvatar?.secure_url || !uploadAvatar?.public_id) {
+        throw new ApiError(500, "Failed To Upload Admin Avatar");
+    }
+
+    // Delete old avatar after the new upload succeeds
+    const oldAvatarPublicId = admin.avatar?.public_id;
+
+    admin.avatar = {
+        url: uploadAvatar.secure_url,
+        public_id: uploadAvatar.public_id,
+    };
+
+    await admin.save();
+
+    // Clean up old Cloudinary image
+    if (oldAvatarPublicId) {
+        try {
+            await cloudinary.uploader.destroy(oldAvatarPublicId);
+        } catch (error) {
+            console.error("Failed to delete old admin avatar:", error);
+        }
+    }
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            {
+                avatar: admin.avatar,
+            },
+            "Admin Avatar Updated Successfully"
+        )
+    );
+});
+
+
+const getAdminProfile = asyncHandler(async (req, res) => {
+    const admin = await Admin.findOne({
+        singletonKey: "PEER_HIRING_OWNER",
+    }).select("-password");
+
+    if (!admin) {
+        throw new ApiError(404, "Admin Not Found");
+    }
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            {
+                admin,
+            },
+            "Admin Profile Fetched Successfully"
+        )
+    );
+});
+
+
+
+const adminLogout = asyncHandler(async (req, res) => {
+    const cookieOptions = {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+        path: "/",
+    };
+
+    return res
+        .status(200)
+        .clearCookie("accessToken", cookieOptions)
+        .json(
+            new ApiResponse(
+                200,
+                {},
+                "Admin Logged Out Successfully"
+            )
+        );
+});
+
 export {
     getAdminDashboardStats,
     getAllUsers,
+    adminLogout,
     verifyCompany,
     rejectCompany,
     blockCompany,
@@ -974,5 +1335,11 @@ export {
     blockJob,
     deleteJob,
     getAllJobs,
-    getJobById
+    getJobById,
+    unlockJob,
+    unblockCompany,
+    softDeleteCompany,
+    updateAdminAvatar,
+    getAdminProfile,
+    restoreCompany
 };

@@ -28,10 +28,10 @@ router.post("/sendEmailVerificationOtp",verifyUser, sendVerifyAccountOtp);
 router.post("/VerifyEmail",verifyUser, verifyAccount);
 router.post("/SendPasswordResetOtp", sendForgetPasswordOtp);
 router.post("/forgetPassword", forgetPassword);
-router.post("/changeName",verifyUser, changeName);
+router.patch("/changeName",verifyUser, changeName);
 router.post("/logoutCurrentUser",verifyUser, logoutCurrentUser);
 router.post("/sendDeleteAccountOtp",verifyUser, sendDeleteAccountOtp);
-router.post("/deleteAccount",verifyUser, deleteAccount);
+router.delete("/deleteAccount",verifyUser, deleteAccount);
 router.get("/fetchUser",verifyUser, fetchUser);
 router.post("/refreshAccessToken", refreshAccessToken);
 router.patch("/update-avatar",

@@ -1,38 +1,27 @@
+
 import { Router } from "express";
+
 import { adminAuth } from "../middleware/admin.middleware.js";
-import {verifyUser} from "../middleware/verifyUser.middleware.js"
-import { createReport, getAllReports, getReportById, rejectReport, resolveReport } from "../controllers/report.controller.js";
+import { verifyUser } from "../middleware/verifyUser.middleware.js";
+
+import {
+    createReport,
+    getAllReports,
+    getReportById,
+    rejectReport,
+    resolveReport,
+} from "../controllers/report.controller.js";
 
 const router = Router();
 
-router.get(
-    "/",
-    adminAuth,
-    getAllReports
-);
+router.get("/", adminAuth, getAllReports);
 
-router.get(
-    "/:reportId",
-    adminAuth,
-    getReportById
-)
+router.get("/:reportId", adminAuth, getReportById);
 
-router.patch(
-    "/:reportId/resolve",
-    adminAuth,
-    resolveReport
-)
+router.patch("/:reportId/resolve", adminAuth, resolveReport);
 
-router.patch(
-    "/:reportId/reject",
-    adminAuth,
-    rejectReport
-)
+router.patch("/:reportId/reject", adminAuth, rejectReport);
 
-router.post(
-    "/create",
-    verifyUser,
-    createReport
-)
+router.post("/create", verifyUser, createReport);
 
 export default router;

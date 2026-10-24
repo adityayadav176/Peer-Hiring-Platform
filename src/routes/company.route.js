@@ -1,72 +1,32 @@
 import { Router } from "express";
-
 import {
-    createCompany,
-    deleteCompany,
-    getAllCompanies,
-    getCompanyById,
-    permanentDeleteCompany,
-    restoreCompany,
-    updateCompany
+  createCompany,
+  getMyCompany,
+  getCompanyById,
+  updateCompany,
+  updateCompanyLogo,
 } from "../controllers/company.controller.js";
 
 import { verifyUser } from "../middleware/verifyUser.middleware.js";
-import { isRecruiter } from "../middleware/recuiter.middleware.js";
+import { upload } from "../middleware/multer.middleware.js";
+import {isRecruiter} from "../middleware/recuiter.middleware.js"
 
 const router = Router();
 
-// Create Company
-router.post(
-    "/",
-    verifyUser,
-    isRecruiter,
-    createCompany
-);
+router.post("/", verifyUser,isRecruiter, upload.single("logo"), createCompany);
 
-// Get Company
-router.get(
-    "/:companyId",
-    verifyUser,
-    getCompanyById
-);
+router.get("/my-company", verifyUser, isRecruiter, getMyCompany);
 
-// Get All Companies
-router.get(
-    "/",
-    verifyUser,
-    getAllCompanies
-);
+router.get("/:companyId", verifyUser, isRecruiter, getCompanyById);
 
-// Update Company
+router.patch("/:companyId", verifyUser, isRecruiter, updateCompany);
+
 router.patch(
-    "/:companyId",
-    verifyUser,
-    isRecruiter,
-    updateCompany
-);
-
-// Soft Delete Company
-router.patch(
-    "/:companyId/delete",
-    verifyUser,
-    isRecruiter,
-    deleteCompany
-);
-
-// Permanent Delete Company
-router.delete(
-    "/:companyId/permanent",
-    verifyUser,
-    isRecruiter,
-    permanentDeleteCompany
-);
-
-// Restore Company
-router.patch(
-    "/:companyId/restore",
-    verifyUser,
-    isRecruiter,
-    restoreCompany
+  "/:companyId/logo",
+  verifyUser,
+  isRecruiter,
+  upload.single("logo"),
+  updateCompanyLogo
 );
 
 export default router;

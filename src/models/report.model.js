@@ -18,7 +18,7 @@ const ReportSchema = new Schema(
             type: Schema.Types.ObjectId,
             ref: "Job",
             default: null
-        },
+        },  
 
         reason: {
             type: String,
@@ -27,10 +27,11 @@ const ReportSchema = new Schema(
         },
 
         description: {
-            type: String,
-            trim: true,
-            default: ""
-        },
+    type: String,
+    trim: true,
+    default: "",
+    maxlength: 2000,
+},
 
         status: {
             type: String,
@@ -45,10 +46,10 @@ const ReportSchema = new Schema(
         },
 
         resolvedBy: {
-            type: Schema.Types.ObjectId,
-            ref: "User",
-            default: null
-        },
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Admin",
+    default: null,
+},
 
         resolvedAt: {
             type: Date,

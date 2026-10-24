@@ -17,9 +17,10 @@ const JobSchema = new Schema({
         required: true,
     },
     recruiterId: {
-        type: Schema.Types.ObjectId,
-        required: true
-    },
+    type: Schema.Types.ObjectId,
+    ref: "User",
+    required: true
+},
     salary: {
         min: {
             type: Number,
@@ -71,7 +72,14 @@ const JobSchema = new Schema({
         default: 0,
         min: 0
     },
-    isBlocked : {
+    viewedBy: {
+        type: [{
+            type: Schema.Types.ObjectId,
+            ref: "User",
+        }],
+        default: [],
+    },
+    isBlocked: {
         type: Boolean,
         default: false
     },

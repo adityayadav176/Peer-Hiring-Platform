@@ -1,141 +1,244 @@
 import mongoose, { Schema } from "mongoose";
 
-const userProfileSchema = new Schema({
-    userId: {
-        type: Schema.Types.ObjectId,
-        required: true,
-        unique: true,
-        ref: "User"
-    },
-    bio: {
-        type: String,
-        maxlength: 500,
-        trim: true
-    },
-    headline: {
-        type: String,
-        trim: true
-    },
-    skills: [
-        {
-            name: {
-                type: String,
-                trim: true
-            },
-            level: {
-                type: String,
-                enum: [
-                    "beginner",
-                    "intermediate",
-                    "expert"
-                ],
-                default: "intermediate"
-            }
-        }
-    ],
-    projects: [
-        {
-            title: {
-                type: String,
-                required: true
-            },
-            description: String,
-            githubUrl: String,
-            liveUrl: String,
-            image: {
-                url: String,
-                public_id: String
-            },
-            technologies: [
-                String
-            ],
-            startDate: Date,
-            endDate: Date
-        }
-    ],
-    experience: [
-        {
-            company: String,
-            position: String,
-            employmentType: {
-                type: String,
-                enum: [
-                    "internship",
-                    "full-time",
-                    "part-time",
-                    "contract"
-                ]
-            },
-            startDate: Date,
-            endDate: Date,
-            currentlyWorking: {
-                type: Boolean,
-                default: false
-            },
-            description: String
-        }
-    ],
-    education: [
-        {
-            institute: {
-                type: String,
-                trim: true
-            },
-            degree: String,
-            field: String,
-            startYear: Number,
-            endYear: Number,
-            grade: String
-        }
-    ],
-    socialLinks: {
-        github: String,
-        linkedin: String,
-        portfolio: String
-    },
-    resumeId: {
-        type: Schema.Types.ObjectId,
-        ref: "Resume"
-    },
-    profileCompletion: {
+const userProfileSchema = new Schema(
+    {
+        userId: {
+            type: Schema.Types.ObjectId,
+            required: true,
+            unique: true,
+            ref: "User",
+        },
+
+        profileViews: {
         type: Number,
         default: 0,
-        min: 0,
-        max: 100
     },
-    location: {
-        city: String,
-        state: String,
-        country: {
+
+        bio: {
             type: String,
-            default: "India"
-        }
-    },
-    preferences: {
-        lookingForJob: {
-            type: Boolean,
-            default: true
+            maxlength: 500,
+            trim: true,
         },
-        expectedSalary: {
-            min: Number,
-            max: Number,
-            currency: {
+
+        headline: {
+            type: String,
+            trim: true,
+        },
+
+        skills: [
+            {
+                name: {
+                    type: String,
+                    trim: true,
+                },
+
+                level: {
+                    type: String,
+                    enum: ["beginner", "intermediate", "expert"],
+                    default: "intermediate",
+                },
+            },
+        ],
+
+        projects: [
+            {
+                title: {
+                    type: String,
+                    required: true,
+                    trim: true,
+                },
+
+                description: {
+                    type: String,
+                    trim: true,
+                },
+
+                githubUrl: {
+                    type: String,
+                    trim: true,
+                },
+
+                liveUrl: {
+                    type: String,
+                    trim: true,
+                },
+
+                image: {
+                    url: String,
+                    public_id: String,
+                },
+
+                technologies: [
+                    {
+                        type: String,
+                        trim: true,
+                    },
+                ],
+
+                startDate: Date,
+                endDate: Date,
+            },
+        ],
+
+        experience: [
+            {
+                company: {
+                    type: String,
+                    trim: true,
+                },
+
+                position: {
+                    type: String,
+                    trim: true,
+                },
+
+                employmentType: {
+                    type: String,
+                    enum: [
+                        "internship",
+                        "full-time",
+                        "part-time",
+                        "contract",
+                    ],
+                },
+
+                startDate: Date,
+                endDate: Date,
+
+                currentlyWorking: {
+                    type: Boolean,
+                    default: false,
+                },
+
+                description: {
+                    type: String,
+                    trim: true,
+                },
+            },
+        ],
+
+        education: [
+            {
+                institute: {
+                    type: String,
+                    trim: true,
+                },
+
+                degree: {
+                    type: String,
+                    trim: true,
+                },
+
+                field: {
+                    type: String,
+                    trim: true,
+                },
+
+                startYear: Number,
+                endYear: Number,
+
+                grade: {
+                    type: String,
+                    trim: true,
+                },
+            },
+        ],
+
+        socialLinks: {
+            github: {
                 type: String,
-                default: "INR"
-            }
+                trim: true,
+            },
+
+            linkedin: {
+                type: String,
+                trim: true,
+            },
+
+            portfolio: {
+                type: String,
+                trim: true,
+            },
         },
-        preferredJobType: [
+
+        resumeId: {
+            type: Schema.Types.ObjectId,
+            ref: "Resume",
+        },
+
+        profileCompletion: {
+            type: Number,
+            default: 0,
+            min: 0,
+            max: 100,
+        },
+
+        location: {
+            city: {
+                type: String,
+                trim: true,
+            },
+
+            state: {
+                type: String,
+                trim: true,
+            },
+
+            country: {
+                type: String,
+                trim: true,
+                default: "India",
+            },
+        },
+
+       preferences: {
+    lookingForJob: {
+        type: Boolean,
+        default: true,
+    },
+
+    preferredJobType: {
+        type: [
             {
                 type: String,
                 enum: [
-                    "remote",
-                    "hybrid",
-                    "onsite"
-                ]
-            }
-        ]
+                    "full-time",
+                    "part-time",
+                    "internship",
+                    "freelance",
+                    "contract",
+                ],
+            },
+        ],
+        default: ["full-time"],
+    },
+
+    workMode: {
+        type: String,
+        enum: ["remote", "hybrid", "onsite"],
+        default: "remote",
+    },
+
+    expectedSalary: {
+        min: {
+            type: Number,
+        },
+
+        max: {
+            type: Number,
+        },
+
+        currency: {
+            type: String,
+            default: "INR",
+        },
+    },
+},
+    },
+    {
+        timestamps: true,
     }
-}, { timestamps: true });
+);
 
 userProfileSchema.index({
     bio: "text",
@@ -147,9 +250,7 @@ userProfileSchema.index({
     "education.degree": "text",
     "education.field": "text",
     "location.city": "text",
-    "location.country": "text"
+    "location.country": "text",
 });
-export const UserProfile = mongoose.model(
-    "UserProfile",
-    userProfileSchema
-);
+
+export const UserProfile = mongoose.model("UserProfile", userProfileSchema) || mongoose.models.UserProfile;

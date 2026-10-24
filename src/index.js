@@ -32,9 +32,6 @@ async function startServer() {
         await connectToMongo();
         console.log("MongoDB Connected");
 
-        await verifySmtp();
-        console.log("SMTP Verified");
-
         server.listen(PORT, () => {
             console.log(`${APP_NAME} running on port ${PORT}`);
             console.log(`Server is running on http://localhost:${PORT}`)
@@ -45,21 +42,5 @@ async function startServer() {
         process.exit(1);
     }
 }
-
-// if (cluster.isPrimary) {
-//     console.log(`Master ${process.pid} is running`);
-
-//     for (let i = 0; i < numCPUs; i++) {
-//         cluster.fork();
-//     }
-
-//     cluster.on("exit", (worker) => {
-//         console.log(`Worker ${worker.process.pid} died`);
-//         cluster.fork();
-//     });
-
-// } else {
-//     startServer();
-// }
 
 startServer();

@@ -1,51 +1,201 @@
+
+import mongoose from "mongoose";
+
 import { Report } from "../models/report.model.js";
+import { Job } from "../models/job.model.js";
+import { User } from "../models/user.model.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
-import {Job} from "../models/job.model.js"
-import mongoose from "mongoose";
 
+const REPORT_STATUSES = ["pending", "resolved", "rejected"];
+
+const populateReport = (query) =>
+  query
+    .populate({
+      path: "reporter",
+      select: "name email avatar role createdAt",
+    })
+    .populate({
+      path: "reportedUser",
+      select: "name email avatar role accountStatus isBlocked createdAt",
+    })
+    .populate({
+      path: "reportedJob",
+      select: "title companyId",
+      populate: {
+        path: "companyId",
+        select: "name logo headquarters industry",
+      },
+    });
+const getAdminIdentifier = (req) => {
+    const adminId = req.admin?._id;
+
+    if (adminId) {
+        return String(adminId);
+    }
+
+    return "Admin";
+};
 
 const getAllReports = asyncHandler(async (req, res) => {
-
     const {
         page = 1,
         limit = 10,
         status,
-        reason
+        reason,
+        search,
+        startDate,
+        endDate,
+        targetType,
+        sortBy = "createdAt",
+        order = "desc",
     } = req.query;
 
-    const pageNumber = Math.max(Number(page), 1);
-    const limitNumber = Math.min(Math.max(Number(limit), 1), 100);
+    const pageNumber = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNumber = Math.min(
+        Math.max(parseInt(limit, 10) || 10, 1),
+        100
+    );
 
     const skip = (pageNumber - 1) * limitNumber;
 
     const filter = {};
 
     if (status) {
+        if (!REPORT_STATUSES.includes(status)) {
+            throw new ApiError(
+                400,
+                `Invalid status. Allowed values: ${REPORT_STATUSES.join(", ")}`
+            );
+        }
+
         filter.status = status;
     }
 
-    if (reason) {
-        filter.reason = reason;
+    if (targetType) {
+  const normalizedTargetType = targetType.toLowerCase();
+
+  if (!["user", "job"].includes(normalizedTargetType)) {
+    throw new ApiError(
+      400,
+      "Invalid targetType. Allowed values: user, job"
+    );
+  }
+
+  if (normalizedTargetType === "user") {
+    filter.reportedUser = { $exists: true, $ne: null };
+  }
+
+  if (normalizedTargetType === "job") {
+    filter.reportedJob = { $exists: true, $ne: null };
+  }
+}
+
+    if (reason?.trim()) {
+        filter.reason = {
+            $regex: reason.trim(),
+            $options: "i",
+        };
     }
+
+    if (startDate || endDate) {
+        const dateFilter = {};
+
+        if (startDate) {
+            const start = new Date(startDate);
+
+            if (Number.isNaN(start.getTime())) {
+                throw new ApiError(400, "Invalid startDate");
+            }
+
+            dateFilter.$gte = start;
+        }
+
+        if (endDate) {
+            const end = new Date(endDate);
+
+            if (Number.isNaN(end.getTime())) {
+                throw new ApiError(400, "Invalid endDate");
+            }
+
+            end.setHours(23, 59, 59, 999);
+            dateFilter.$lte = end;
+        }
+
+        if (
+            dateFilter.$gte &&
+            dateFilter.$lte &&
+            dateFilter.$gte > dateFilter.$lte
+        ) {
+            throw new ApiError(
+                400,
+                "startDate cannot be after endDate"
+            );
+        }
+
+        filter.createdAt = dateFilter;
+    }
+
+    if (search?.trim()) {
+        const searchTerm = search.trim();
+        const searchRegex = {
+            $regex: searchTerm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+            $options: "i",
+        };
+
+        const [matchingUsers, matchingJobs] = await Promise.all([
+            User.find({
+                $or: [
+                    { name: searchRegex },
+                    { email: searchRegex },
+                ],
+            }).select("_id"),
+
+            Job.find({
+                title: searchRegex,
+            }).select("_id"),
+        ]);
+
+        const userIds = matchingUsers.map((user) => user._id);
+        const jobIds = matchingJobs.map((job) => job._id);
+
+        filter.$or = [
+            { reason: searchRegex },
+            { description: searchRegex },
+            { adminNote: searchRegex },
+            { reporter: { $in: userIds } },
+            { reportedUser: { $in: userIds } },
+            { reportedJob: { $in: jobIds } },
+        ];
+    }
+
+    const allowedSortFields = [
+        "createdAt",
+        "updatedAt",
+        "status",
+        "reason",
+        "resolvedAt",
+    ];
+
+    const safeSortBy = allowedSortFields.includes(sortBy)
+        ? sortBy
+        : "createdAt";
+
+    const sortOrder = order === "asc" ? 1 : -1;
 
     const [reports, totalReports] = await Promise.all([
-        Report.find(filter)
-            .populate("reporter", "name email avatar")
-            .populate("reportedUser", "name email avatar role")
-            .populate("reportedJob", "title company")
-            .populate("resolvedBy", "name email")
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(limitNumber),
+        populateReport(
+            Report.find(filter)
+                .sort({ [safeSortBy]: sortOrder, _id: -1 })
+                .skip(skip)
+                .limit(limitNumber)
+        ),
 
-        Report.countDocuments(filter)
+        Report.countDocuments(filter),
     ]);
 
-    if(!reports) {
-        throw new ApiError(404, "Reports not found");
-    }
+    const totalPages = Math.ceil(totalReports / limitNumber);
 
     return res.status(200).json(
         new ApiResponse(
@@ -55,11 +205,20 @@ const getAllReports = asyncHandler(async (req, res) => {
                 pagination: {
                     totalReports,
                     currentPage: pageNumber,
-                    totalPages: Math.ceil(
-                        totalReports / limitNumber
-                    ),
-                    limit: limitNumber
-                }
+                    totalPages,
+                    limit: limitNumber,
+                    hasNextPage: pageNumber < totalPages,
+                    hasPrevPage: pageNumber > 1,
+                },
+                filters: {
+                    status: status || "",
+                    reason: reason || "",
+                    search: search || "",
+                    startDate: startDate || "",
+                    endDate: endDate || "",
+                    sortBy: safeSortBy,
+                    order: order === "asc" ? "asc" : "desc",
+                },
             },
             "Reports fetched successfully"
         )
@@ -67,18 +226,15 @@ const getAllReports = asyncHandler(async (req, res) => {
 });
 
 const getReportById = asyncHandler(async (req, res) => {
-
     const { reportId } = req.params;
 
     if (!mongoose.Types.ObjectId.isValid(reportId)) {
         throw new ApiError(400, "Invalid report ID");
     }
 
-    const report = await Report.findById(reportId)
-        .populate("reporter", "name email avatar role")
-        .populate("reportedUser", "name email avatar role")
-        .populate("reportedJob")
-        .populate("resolvedBy", "name email");
+    const report = await populateReport(
+        Report.findById(reportId)
+    );
 
     if (!report) {
         throw new ApiError(404, "Report not found");
@@ -93,13 +249,16 @@ const getReportById = asyncHandler(async (req, res) => {
     );
 });
 
-const resolveReport = asyncHandler(async (req, res) => {
-
+const updateReportStatus = asyncHandler(async (req, res, nextStatus) => {
     const { reportId } = req.params;
-    const { adminNote = "" } = req.body;
+    const { adminNote = "" } = req.body || {};
 
     if (!mongoose.Types.ObjectId.isValid(reportId)) {
         throw new ApiError(400, "Invalid report ID");
+    }
+
+    if (typeof adminNote !== "string") {
+        throw new ApiError(400, "Admin note must be a string");
     }
 
     const report = await Report.findById(reportId);
@@ -115,159 +274,83 @@ const resolveReport = asyncHandler(async (req, res) => {
         );
     }
 
-    report.status = "resolved";
-    report.adminNote = adminNote;
-    report.resolvedBy = req.admin._id;
+    report.status = nextStatus;
+    report.adminNote = adminNote.trim();
+    report.resolvedBy = getAdminIdentifier(req);
     report.resolvedAt = new Date();
 
     await report.save();
 
+    const updatedReport = await populateReport(
+        Report.findById(report._id)
+    );
+
     return res.status(200).json(
         new ApiResponse(
             200,
-            report,
-            "Report resolved successfully"
+            updatedReport,
+            nextStatus === "resolved"
+                ? "Report resolved successfully"
+                : "Report rejected successfully"
         )
     );
+});
+
+const resolveReport = asyncHandler(async (req, res) => {
+    return updateReportStatus(req, res, "resolved");
 });
 
 const rejectReport = asyncHandler(async (req, res) => {
-
-    const { reportId } = req.params;
-    const { adminNote = "" } = req.body;
-
-    if (!mongoose.Types.ObjectId.isValid(reportId)) {
-        throw new ApiError(400, "Invalid report ID");
-    }
-
-    const report = await Report.findById(reportId);
-
-    if (!report) {
-        throw new ApiError(404, "Report not found");
-    }
-
-    if (report.status !== "pending") {
-        throw new ApiError(
-            400,
-            `Report is already ${report.status}`
-        );
-    }
-
-    report.status = "rejected";
-    report.adminNote = adminNote;
-    report.resolvedBy = req.admin._id;
-    report.resolvedAt = new Date();
-
-    await report.save();
-
-    return res.status(200).json(
-        new ApiResponse(
-            200,
-            report,
-            "Report rejected successfully"
-        )
-    );
+    return updateReportStatus(req, res, "rejected");
 });
 
 const createReport = asyncHandler(async (req, res) => {
+  const { reportedUser, reportedJob, reason, description = "" } =
+    req.body;
 
-    const { reportedUser, reportedJob, reason, description } = req.body;
+  const reporter = req.user?._id;
 
-    // At least one target is required
-    if (!reportedUser && !reportedJob) {
-        throw new ApiError(
-            400,
-            "You must report a user or a job"
-        );
-    }
+  if (!reporter) {
+    throw new ApiError(401, "Authentication required.");
+  }
 
-    // Both cannot be reported in one report
-    if (reportedUser && reportedJob) {
-        throw new ApiError(
-            400,
-            "You can report either a user or a job"
-        );
-    }
+  if (!reason?.trim()) {
+    throw new ApiError(400, "Reason is required.");
+  }
 
-    if (!reason?.trim()) {
-        throw new ApiError(400, "Report reason is required");
-    }
+  if ((!reportedUser && !reportedJob) ||
+      (reportedUser && reportedJob)) {
+    throw new ApiError(
+      400,
+      "Report exactly one user or one job."
+    );
+  }
 
-    // Validate reported user ID
-    if (
-        reportedUser &&
-        !mongoose.Types.ObjectId.isValid(reportedUser)
-    ) {
-        throw new ApiError(400, "Invalid reported user ID");
-    }
+  if (reportedUser && !mongoose.isValidObjectId(reportedUser)) {
+    throw new ApiError(400, "Invalid reported user ID.");
+  }
 
-    // Validate reported job ID
-    if (
-        reportedJob &&
-        !mongoose.Types.ObjectId.isValid(reportedJob)
-    ) {
-        throw new ApiError(400, "Invalid reported job ID");
-    }
+  if (reportedJob && !mongoose.isValidObjectId(reportedJob)) {
+    throw new ApiError(400, "Invalid reported job ID.");
+  }
 
-    // User cannot report himself
-    if (
-        reportedUser &&
-        reportedUser.toString() === req.user._id.toString()
-    ) {
-        throw new ApiError(
-            400,
-            "You cannot report yourself"
-        );
-    }
+  const report = await Report.create({
+    reporter,
+    reportedUser: reportedUser || null,
+    reportedJob: reportedJob || null,
+    reason: reason.trim(),
+    description: description.trim(),
+  });
 
-    // Check reported user exists
-    if (reportedUser) {
-        const user = await User.findById(reportedUser);
-
-        if (!user) {
-            throw new ApiError(
-                404,
-                "Reported user not found"
-            );
-        }
-    }
-
-    // Check reported job exists
-    if (reportedJob) {
-        const job = await Job.findById(reportedJob);
-
-        if (!job) {
-            throw new ApiError(
-                404,
-                "Reported job not found"
-            );
-        }
-    }
-
-    // Create report
-    const report = await Report.create({
-        reporter: req.user._id,
-        reportedUser: reportedUser || null,
-        reportedJob: reportedJob || null,
-        reason: reason.trim(),
-        description: description?.trim() || "",
-        status: "pending"
-    });
-
-    return res
-        .status(201)
-        .json(
-            new ApiResponse(
-                201,
-                report,
-                "Report submitted successfully"
-            )
-        );
+  return res.status(201).json(
+    new ApiResponse(201, report, "Report created successfully.")
+  );
 });
+
 export {
     getAllReports,
     getReportById,
     resolveReport,
     rejectReport,
-    createReport
-}
+    createReport,
+};
