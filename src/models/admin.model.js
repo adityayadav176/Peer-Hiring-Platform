@@ -50,12 +50,23 @@ const adminSchema = new Schema(
       type: Date,
       default: null,
     },
+    refreshToken: {
+  type: String,
+  default: "",
+  select: false,
+},
+refreshTokenExpiresAt: {
+  type: Date,
+  default: null,
+},
   },
   {
     timestamps: true,
   }
 );
 
-const Admin = mongoose.model("Admin", adminSchema);
+const Admin =
+  mongoose.models.Admin ||
+  mongoose.model("Admin", adminSchema);
 
 export default Admin;

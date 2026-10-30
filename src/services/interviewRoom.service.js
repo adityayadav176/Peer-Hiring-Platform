@@ -1,34 +1,64 @@
+
+import mongoose from "mongoose";
 import { Interview } from "../models/interview.model.js";
 import { ApiError } from "../utils/ApiError.js";
 
-const authorizeInterviewRoom = async({interviewId, userId}) => {
-    const interview = await Interview.findOne({
-        interviewRoomId
-    })
+const getReferenceId = (value) =>
+  value?._id?.toString() ?? value?.toString();
 
-    if(!interview) {
-        throw new ApiError(404, "Interview Room Not Found");
-    }
+const authorizeInterviewRoom = async ({ interviewId, userId }) => {
+  if (
+    typeof interviewId !== "string" ||
+    !mongoose.isValidObjectId(interviewId)
+  ) {
+    throw new ApiError(400, "A valid interview ID is required");
+  }
 
-    if(!interview.interviewType === "Online") {
-        throw new ApiError(400, "Video Calling Is Available Only For Online Interview");
-    }
+  if (!userId || !mongoose.isValidObjectId(userId)) {
+    throw new ApiError(401, "Unauthorized access");
+  }
 
-    const isCandidate = await interview.candidate.toString() === userId.toString();
+  const interview = await Interview.findById(interviewId);
 
-    const isRecruiter = await interview.recruiter.toString() === userId.toString();
+  if (!interview) {
+    throw new ApiError(404, "Interview not found");
+  }
 
-    if(!isCandidate && !isRecruiter) {
-        throw new ApiError(403, "You are not authorized to join this interview");
-    }
+  if (interview.interviewType !== "Online") {
+    throw new ApiError(
+      400,
+      "Video calling is available only for online interviews"
+    );
+  }
 
-    if(["Rejected", "Cancelled", "Completed", "No Show"].includes(interview.status)) {
-         throw new ApiError(400, `Interview Is Already ${interview.status}`)
-    }
+  const currentUserId = userId.toString();
+  const isCandidate =
+    getReferenceId(interview.candidate) === currentUserId;
+  const isRecruiter =
+    getReferenceId(interview.recruiter) === currentUserId;
 
-    return interview;
-}
+  if (!isCandidate && !isRecruiter) {
+    throw new ApiError(
+      403,
+      "You are not authorized to join this interview"
+    );
+  }
 
-export {
-    authorizeInterviewRoom
-}
+  const unavailableStatuses = [
+    "Rejected",
+    "Cancelled",
+    "Completed",
+    "No Show",
+  ];
+
+  if (unavailableStatuses.includes(interview.status)) {
+    throw new ApiError(
+      400,
+      `Interview is already ${interview.status}`
+    );
+  }
+
+  return interview;
+};
+
+export { authorizeInterviewRoom };

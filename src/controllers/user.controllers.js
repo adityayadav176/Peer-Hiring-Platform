@@ -1,3 +1,4 @@
+
 import { uploadOnCloudinary } from "../utils/cloudinary.js";
 import { transporter } from "../utils/nodemailer.js";
 import { PROJECT_NAME } from "../constant/constant.js";
@@ -11,261 +12,24 @@ import { OAuth2Client } from "google-auth-library";
 import crypto from "crypto";
 import speakeasy from "speakeasy";
 import QRCode from "qrcode";
-import JWT from "jsonwebtoken";
-import { UAParser } from "ua-parser-js";
-import { Session } from "../models/session.model.js";
-import { deleteFromCloudinary } from "../utils/cloudinary.js";
-import Admin from "../models/admin.model.js";
 import jwt from "jsonwebtoken";
+import { Session } from "../models/session.model.js";
+import Admin from "../models/admin.model.js";
 
-const generateAccessAndRefreshToken = async (userId, sessionId) => {
-    const user = await User.findById(userId);
-
-    if (!user) {
-        throw new ApiError(404, "User not found");
-    }
-
-    const accessToken = user.generateAccessToken(sessionId);
-
-    const refreshToken = user.generateRefreshToken(sessionId);
-
-    return {
-        accessToken,
-        refreshToken
-    };
-};
-
-const client = new OAuth2Client(
-    process.env.GOOGLE_CLIENT_ID
-)
-
-const registerUser = asyncHandler(async (req, res) => {
-    const {
-        name,
-        email,
-        password,
-        phoneNo,
-        role
-    } = req.body;
-
-    // ==============================
-    // VALIDATION
-    // ==============================
-
-    if (
-        !name?.trim() ||
-        !email?.trim() ||
-        !password?.trim() ||
-        !phoneNo?.trim() 
-    ) {
-        throw new ApiError(
-            400,
-            "All fields are required."
-        );
-    }
-
-    const normalizedEmail =
-        email.trim().toLowerCase();
-
-    const normalizedPhone =
-        phoneNo.trim();
-
-    if (password.length < 8) {
-        throw new ApiError(
-            400,
-            "Password must be at least 8 characters."
-        );
-    }
-
-    // ==============================
-    // CHECK EXISTING USER
-    // ==============================
-
-    const existedUser = await User.findOne({
-        $or: [
-            {
-                email: normalizedEmail
-            },
-            {
-                phoneNo: normalizedPhone
-            }
-        ]
-    });
-
-    if (existedUser) {
-        throw new ApiError(
-            409,
-            "User already exists."
-        );
-    }
-
-    // ==============================
-    // GET FILES
-    // ==============================
-
-    const avatarLocalPath =
-        req.files?.avatar?.[0]?.path;
-
-    const coverLocalPath =
-        req.files?.coverImage?.[0]?.path;
-
-    if (!avatarLocalPath) {
-        throw new ApiError(
-            400,
-            "Avatar is required."
-        );
-    }
-
-    if (!coverLocalPath) {
-        throw new ApiError(
-            400,
-            "Cover image is required."
-        );
-    }
-
-    // ==============================
-    // UPLOAD TO CLOUDINARY
-    // ==============================
-
-    const avatarUpload = await uploadOnCloudinary(avatarLocalPath);
-    const coverUpload = await uploadOnCloudinary(coverLocalPath);
-
-    if (
-        !avatarUpload?.secure_url ||
-        !avatarUpload?.public_id
-    ) {
-        throw new ApiError(
-            500,
-            "Failed to upload avatar."
-        );
-    }
-
-    if (
-        !coverUpload?.secure_url ||
-        !coverUpload?.public_id
-    ) {
-        throw new ApiError(
-            500,
-            "Failed to upload cover image."
-        );
-    }
-
-    // ==============================
-    // CREATE USER
-    // ==============================
-
-    const user = await User.create({
-        name: name.trim(),
-
-        email: normalizedEmail,
-
-        password,
-
-        role,
-
-        phoneNo: normalizedPhone,
-
-        avatar: {
-            url: avatarUpload.secure_url,
-
-            public_id: avatarUpload.public_id
-        },
-
-        coverImage: {
-            url: coverUpload.secure_url,
-
-            public_id: coverUpload.public_id
-        }
-    });
-
-    // ==============================
-    // SEND WELCOME EMAIL
-    // ==============================
-
-    await transporter
-        .sendMail({
-            from:
-                process.env.SENDER_EMAIL,
-
-            to: normalizedEmail,
-
-            subject:
-                `Welcome To ${PROJECT_NAME}`,
-
-            html: `
-                    <div
-                        style="
-                            font-family: Arial, sans-serif;
-                        "
-                    >
-
-                        <h2>
-                            Hello ${name}
-                        </h2>
-
-                        <p>
-                            Your account has been
-                            created successfully.
-                        </p>
-
-                        <p>
-                            Welcome to
-                            <b>
-                                ${PROJECT_NAME}
-                            </b>.
-                        </p>
-
-                    </div>
-                `
-        })
-        .catch((error) => {
-            console.error(
-                "Email Error:",
-                error.message
-            );
-        });
-
-    // ==============================
-    // FETCH SAFE USER
-    // ==============================
-
-    const createdUser =
-        await User.findById(user._id)
-            .select(
-                "-password -refreshToken"
-            );
-
-    // ==============================
-    // RESPONSE
-    // ==============================
-
-    return res
-        .status(201)
-        .json(
-            new ApiResponse(
-                201,
-                {
-                    user: createdUser
-                },
-                "User registered successfully."
-            )
-        );
-});
-
+const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOCK_DURATION = 60 * 60 * 1000;
+const ACCESS_TOKEN_DURATION = 15 * 60 * 1000;
+const REFRESH_TOKEN_DURATION = 30 * 24 * 60 * 60 * 1000;
+const TWO_FACTOR_TOKEN_DURATION = 5 * 60 * 1000;
 
 const cookieOptions = {
-  httpOnly: true,
-  secure: process.env.NODE_ENV === "production",
-  sameSite:
-    process.env.NODE_ENV === "production" ? "none" : "lax",
-  path: "/",
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+    path: "/",
 };
-
-const ACCESS_TOKEN_DURATION = 7 * 24 * 60 * 60 * 1000;
-const REFRESH_TOKEN_DURATION = 30 * 24 * 60 * 60 * 1000;
 
 const setAuthCookies = (res, accessToken, refreshToken) => {
     res.cookie("accessToken", accessToken, {
@@ -279,479 +43,564 @@ const setAuthCookies = (res, accessToken, refreshToken) => {
     });
 };
 
-const createSafeSession = (session) => ({
-  _id: session._id,
-  device: session.device,
-  browser: session.browser,
-  os: session.os,
-  ipAddress: session.ipAddress,
-  createdAt: session.createdAt,
-  lastActiveAt: session.lastActiveAt,
-});
-
-const getSafeUser = async (userId) => {
-  return User.findById(userId).select(
-    [
-      "-password",
-      "-refreshToken",
-      "-forgetPasswordOtp",
-      "-forgetPasswordOtpExpiredAt",
-      "-passwordResetToken",
-      "-passwordResetTokenExpiresAt",
-      "-deleteAccountOtp",
-      "-deleteAccountOtpExpiredAt",
-      "-emailVerificationOTP",
-      "-emailVerificationOTPExpiry",
-      "-twoFactorSecret",
-    ].join(" ")
-  );
+const clearAuthCookies = (res) => {
+    res.clearCookie("accessToken", cookieOptions);
+    res.clearCookie("refreshToken", cookieOptions);
 };
 
-const loginUser = asyncHandler(async (req, res) => {
-  const { email, phoneNo, password } = req.body;
-  const ipAddress = req.ip;
+const hashToken = (token) =>
+    crypto.createHash("sha256").update(token).digest("hex");
 
-  // 1. Validate login input
-  if ((!email?.trim() && !phoneNo?.trim()) || !password) {
-    throw new ApiError(
-      400,
-      "Email or phone number and password are required"
-    );
-  }
-
-  if (
-    !process.env.ACCESS_TOKEN_SECRET ||
-    !process.env.REFRESH_TOKEN_SECRET
-  ) {
-    throw new ApiError(
-      500,
-      "Authentication environment variables are missing"
-    );
-  }
-
-  const normalizedEmail = email?.trim().toLowerCase();
-  const normalizedPhone = phoneNo?.trim();
-
-  if (normalizedEmail) {
-    const admin = await Admin.findOne({
-      email: normalizedEmail,
-    }).select("+password");
-
-    if (admin) {
-      if (!admin.isActive) {
-        throw new ApiError(403, "Admin account is inactive");
-      }
-
-      if (!admin.password) {
-        throw new ApiError(401, "Invalid email or password");
-      }
-
-      const isPasswordCorrect = await bcrypt.compare(
-        password,
-        admin.password
-      );
-
-      if (!isPasswordCorrect) {
-        throw new ApiError(401, "Invalid email or password");
-      }
-
-      admin.lastLoginAt = new Date();
-
-      await admin.save({
-        validateBeforeSave: false,
-      });
-
-      const accessToken = jwt.sign(
-        {
-          adminId: admin._id.toString(),
-          type: "admin",
-        },
-        process.env.ACCESS_TOKEN_SECRET,
-        {
-          expiresIn:
-            process.env.ACCESS_TOKEN_EXPIRY || "7d",
-        }
-      );
-
-      const refreshToken = jwt.sign(
-        {
-          adminId: admin._id.toString(),
-          type: "admin",
-        },
-        process.env.REFRESH_TOKEN_SECRET,
-        {
-          expiresIn:
-            process.env.REFRESH_TOKEN_EXPIRY || "30d",
-        }
-      );
-
-      setAuthCookies(res, accessToken, refreshToken);
-
-      return res.status(200).json(
-        new ApiResponse(
-          200,
-          {
-            _id: admin._id,
-            name: admin.name,
-            email: admin.email,
-            isActive: admin.isActive,
-            lastLoginAt: admin.lastLoginAt,
-            accessToken,
-            type: "admin",
-          },
-          "Admin logged in successfully"
-        )
-      );
-    }
-  }
-
-  const userConditions = [];
-
-  if (normalizedEmail) {
-    userConditions.push({
-      email: normalizedEmail,
-    });
-  }
-
-  if (normalizedPhone) {
-    userConditions.push({
-      phoneNo: normalizedPhone,
-    });
-  }
-
-  const user = await User.findOne({
-    $or: userConditions,
-  }).select("+password");
-
-  // Always check existence before accessing user properties.
-  if (!user) {
-    throw new ApiError(401, "Invalid email or password");
-  }
-
-  // Your schema roles are exactly "User" and "recruiter".
-  if (!["User", "recruiter"].includes(user.role)) {
-    throw new ApiError(403, "Invalid account role");
-  }
-
-  const accountType =
-    user.role === "recruiter" ? "recruiter" : "user";
-
-  if (user.accountStatus === "blocked") {
-    throw new ApiError(
-      403,
-      "Your account is blocked. Please contact support."
-    );
-  }
-  
-  if (user.lockUntil && user.lockUntil > new Date()) {
-    const remainingTime = Math.ceil(
-      (user.lockUntil.getTime() - Date.now()) / 60000
-    );
-
-    throw new ApiError(
-      423,
-      `Account temporarily locked. Try again after ${remainingTime} minute(s).`
-    );
-  }
-
-  // Reset an expired temporary lock.
-  if (user.lockUntil && user.lockUntil <= new Date()) {
-    user.lockUntil = null;
-    user.failedLoginAttempts = 0;
-
-    await user.save({
-      validateBeforeSave: false,
-    });
-  }
-
-  // 6. Reject passwordless social-login accounts.
-  if (!user.password) {
-    throw new ApiError(
-      400,
-      "This account does not have a password. Please use your social login."
-    );
-  }
-
-  // 7. Verify password.
-  const isPasswordCorrect =
-    await user.isPasswordCorrect(password);
-
-  if (!isPasswordCorrect) {
-    user.failedLoginAttempts =
-      (user.failedLoginAttempts || 0) + 1;
-
-    if (user.failedLoginAttempts >= MAX_LOGIN_ATTEMPTS) {
-      user.lockUntil = new Date(
-        Date.now() + LOCK_DURATION
-      );
-
-      await user.save({
-        validateBeforeSave: false,
-      });
-
-      throw new ApiError(
-        423,
-        "Too many failed login attempts. Account locked for 1 hour."
-      );
-    }
-
-    await user.save({
-      validateBeforeSave: false,
-    });
-
-    const attemptsLeft =
-      MAX_LOGIN_ATTEMPTS - user.failedLoginAttempts;
-
-    throw new ApiError(
-      401,
-      `Invalid email or password. ${attemptsLeft} attempt(s) remaining.`
-    );
-  }
-
-  // 8. Two-factor authentication.
-  // Do not issue normal session cookies until 2FA succeeds.
-  if (user.twoFactorEnabled) {
-    const twoFactorToken = jwt.sign(
-      {
-        userId: user._id.toString(),
-        type: accountType,
-        purpose: "login-2fa",
-        tokenVersion: user.tokenVersion,
-      },
-      process.env.ACCESS_TOKEN_SECRET,
-      {
-        expiresIn: "5m",
-      }
-    );
-
-    return res.status(200).json(
-      new ApiResponse(
-        200,
-        {
-          twoFactorRequired: true,
-          twoFactorToken,
-          userId: user._id,
-          type: accountType,
-        },
-        "Two-factor authentication required"
-      )
-    );
-  }
-
-  // 9. Reset failed-login tracking after successful authentication.
-  user.failedLoginAttempts = 0;
-  user.lockUntil = null;
-
-  // 10. Create session.
-  const deviceInfo = req.deviceInfo || {};
-  const userAgent = req.get("user-agent") || "";
-
-  const session = await Session.create({
-    userId: user._id,
-    device: deviceInfo.device || "Unknown",
-    browser: deviceInfo.browser || "Unknown",
-    os: deviceInfo.os || "Unknown",
-    ipAddress,
-    userAgent,
-    lastActiveAt: new Date(),
-  });
-
-  try {
-    // 11. Generate tokens using your User schema methods.
-    const accessToken = user.generateAccessToken(
-      session._id.toString()
-    );
-
-    const refreshToken = user.generateRefreshToken(
-      session._id.toString()
-    );
-
-    // Store a hash of the refresh token in the session.
-    const hashedRefreshToken = crypto
-      .createHash("sha256")
-      .update(refreshToken)
-      .digest("hex");
-
-    session.refreshToken = hashedRefreshToken;
-
-    session.refreshTokenExpiresAt = new Date(
-      Date.now() + REFRESH_TOKEN_DURATION
-    );
-
-    await session.save();
-
-    // 12. Update user presence.
-    user.isOnline = true;
-    user.lastSeen = new Date();
-    user.lastSeenAt = new Date();
-
-    await user.save({
-      validateBeforeSave: false,
-    });
-
-    // 13. Fetch the appropriate safe account document.
-    const safeUser = await getSafeUser(user._id);
-
-    if (!safeUser) {
-      throw new ApiError(500, "Unable to load account details");
-    }
-
-    // 14. Set authentication cookies.
-    setAuthCookies(res, accessToken, refreshToken);
-
-    const safeSession = createSafeSession(session);
-
-    // 15. Recruiter response.
-    if (user.role === "recruiter") {
-      return res.status(200).json(
-        new ApiResponse(
-          200,
-          {
-            recruiter: safeUser,
-            session: safeSession,
-            accessToken,
-            type: "recruiter",
-          },
-          "Recruiter logged in successfully"
-        )
-      );
-    }
-
-    return res.status(200).json(
-      new ApiResponse(
-        200,
-        {
-          user: safeUser,
-          session: safeSession,
-          accessToken,
-          type: "user",
-        },
-        "User logged in successfully"
-      )
-    );
-  } catch (error) {
-    await Session.deleteOne({
-      _id: session._id,
-    });
-
-    throw error;
-  }
+const createSafeSession = (session) => ({
+    _id: session._id,
+    device: session.device,
+    browser: session.browser,
+    os: session.os,
+    ipAddress: session.ipAddress,
+    createdAt: session.createdAt,
+    lastActiveAt: session.lastActiveAt,
 });
 
+const getSafeUser = async (userId) =>
+    User.findById(userId).select(
+        [
+            "-password",
+            "-refreshToken",
+            "-forgetPasswordOtp",
+            "-forgetPasswordOtpExpiredAt",
+            "-passwordResetToken",
+            "-passwordResetTokenExpiresAt",
+            "-deleteAccountOtp",
+            "-deleteAccountOtpExpiredAt",
+            "-emailVerificationOTP",
+            "-emailVerificationOTPExpiry",
+            "-twoFactorSecret",
+        ].join(" ")
+    );
+
+const getDeviceData = (req, userId) => {
+    const deviceInfo = req.deviceInfo || {};
+
+    return {
+        userId,
+        device: deviceInfo.device || "Unknown device",
+        deviceType: deviceInfo.deviceType || "desktop",
+        deviceModel: deviceInfo.deviceModel || "",
+        deviceVendor: deviceInfo.deviceVendor || "",
+        browser: deviceInfo.browser || "Unknown",
+        browserVersion: deviceInfo.browserVersion || "",
+        os: deviceInfo.os || "Unknown",
+        osVersion: deviceInfo.osVersion || "",
+        ipAddress: req.ip || req.socket?.remoteAddress || "Unknown",
+        userAgent: req.get("user-agent") || "",
+        lastActiveAt: new Date(),
+    };
+};
+
+const createUserSession = async (req, user) => {
+    const session = await Session.create(getDeviceData(req, user._id));
+
+    try {
+        const accessToken = await user.generateAccessToken(
+            session._id.toString()
+        );
+
+        const refreshToken = await user.generateRefreshToken(
+            session._id.toString()
+        );
+
+        session.refreshToken = hashToken(refreshToken);
+        session.refreshTokenExpiresAt = new Date(
+            Date.now() + REFRESH_TOKEN_DURATION
+        );
+
+        await session.save();
+
+        user.failedLoginAttempts = 0;
+        user.lockUntil = null;
+        user.isOnline = true;
+        user.lastSeen = new Date();
+        user.lastSeenAt = new Date();
+
+        await user.save({ validateBeforeSave: false });
+
+        const safeUser = await getSafeUser(user._id);
+
+        if (!safeUser) {
+            throw new ApiError(500, "Unable to load account details");
+        }
+
+        return {
+            session,
+            accessToken,
+            refreshToken,
+            safeUser,
+        };
+    } catch (error) {
+        await Session.deleteOne({ _id: session._id });
+        throw error;
+    }
+};
+
+const registerUser = asyncHandler(async (req, res) => {
+    const { name, email, password, phoneNo } = req.body || {};
+
+    if (
+        typeof name !== "string" ||
+        !name.trim() ||
+        typeof email !== "string" ||
+        !email.trim() ||
+        typeof password !== "string"
+    ) {
+        throw new ApiError(400, "Name, email, and password are required.");
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedPhone =
+        typeof phoneNo === "string" ? phoneNo.trim() : "";
+
+    if (password.length < 8) {
+        throw new ApiError(400, "Password must be at least 8 characters.");
+    }
+
+    if (Buffer.byteLength(password, "utf8") > 72) {
+        throw new ApiError(400, "Password must not exceed 72 UTF-8 bytes.");
+    }
+
+    if (password.trim() !== password) {
+        throw new ApiError(
+            400,
+            "Password must not start or end with whitespace."
+        );
+    }
+
+    const conditions = [{ email: normalizedEmail }];
+
+    if (normalizedPhone) {
+        conditions.push({ phoneNo: normalizedPhone });
+    }
+
+    const existingUser = await User.findOne({ $or: conditions });
+
+    if (existingUser) {
+        throw new ApiError(409, "User already exists.");
+    }
+
+    const avatarLocalPath = req.files?.avatar?.[0]?.path;
+    const coverLocalPath = req.files?.coverImage?.[0]?.path;
+
+    if (!avatarLocalPath || !coverLocalPath) {
+        throw new ApiError(400, "Avatar and cover image are required.");
+    }
+
+    const [avatarUpload, coverUpload] = await Promise.all([
+        uploadOnCloudinary(avatarLocalPath),
+        uploadOnCloudinary(coverLocalPath),
+    ]);
+
+    if (!avatarUpload?.secure_url || !avatarUpload?.public_id) {
+        throw new ApiError(500, "Failed to upload avatar.");
+    }
+
+    if (!coverUpload?.secure_url || !coverUpload?.public_id) {
+        throw new ApiError(500, "Failed to upload cover image.");
+    }
+
+    const user = await User.create({
+        name: name.trim(),
+        email: normalizedEmail,
+        password,
+        role: "User",
+        phoneNo: normalizedPhone,
+        avatar: {
+            url: avatarUpload.secure_url,
+            public_id: avatarUpload.public_id,
+        },
+        coverImage: {
+            url: coverUpload.secure_url,
+            public_id: coverUpload.public_id,
+        },
+    });
+
+    await transporter.sendMail({
+        from: process.env.SENDER_EMAIL,
+        to: normalizedEmail,
+        subject: `Welcome To ${PROJECT_NAME}`,
+        html: `
+            <div style="font-family: Arial, sans-serif">
+                <h2>Hello ${name.trim()}</h2>
+                <p>Your account has been created successfully.</p>
+                <p>Welcome to <b>${PROJECT_NAME}</b>.</p>
+            </div>
+        `,
+    }).catch((error) => {
+        console.error("Email Error:", error.message);
+    });
+
+    const createdUser = await getSafeUser(user._id);
+
+    return res.status(201).json(
+        new ApiResponse(
+            201,
+            { user: createdUser },
+            "User registered successfully."
+        )
+    );
+});
+
+const loginUser = asyncHandler(async (req, res) => {
+    const { email, phoneNo, password } = req.body || {};
+
+    if (
+        ((!email || typeof email !== "string" || !email.trim()) &&
+            (!phoneNo || typeof phoneNo !== "string" || !phoneNo.trim())) ||
+        typeof password !== "string" ||
+        !password
+    ) {
+        throw new ApiError(
+            400,
+            "Email or phone number and password are required."
+        );
+    }
+
+    if (
+        !process.env.ACCESS_TOKEN_SECRET ||
+        !process.env.REFRESH_TOKEN_SECRET
+    ) {
+        throw new ApiError(500, "Authentication environment variables are missing.");
+    }
+
+    const normalizedEmail =
+        typeof email === "string" && email.trim()
+            ? email.trim().toLowerCase()
+            : "";
+
+    const normalizedPhone =
+        typeof phoneNo === "string" && phoneNo.trim()
+            ? phoneNo.trim()
+            : "";
+
+    if (normalizedEmail) {
+        const admin = await Admin.findOne({
+            email: normalizedEmail,
+        }).select("+password");
+
+        if (admin) {
+            if (!admin.isActive) {
+                throw new ApiError(403, "Admin account is inactive.");
+            }
+
+            if (!admin.password) {
+                throw new ApiError(401, "Invalid email or password.");
+            }
+
+            const passwordCorrect = await bcrypt.compare(
+                password,
+                admin.password
+            );
+
+            if (!passwordCorrect) {
+                throw new ApiError(401, "Invalid email or password.");
+            }
+
+            const accessToken = jwt.sign(
+                {
+                    adminId: admin._id.toString(),
+                    type: "admin",
+                },
+                process.env.ACCESS_TOKEN_SECRET,
+                {
+                    expiresIn: process.env.ACCESS_TOKEN_EXPIRY || "15m",
+                }
+            );
+
+            const refreshToken = jwt.sign(
+                {
+                    adminId: admin._id.toString(),
+                    type: "admin",
+                },
+                process.env.REFRESH_TOKEN_SECRET,
+                {
+                    expiresIn: process.env.REFRESH_TOKEN_EXPIRY || "30d",
+                }
+            );
+
+            admin.refreshToken = hashToken(refreshToken);
+            admin.refreshTokenExpiresAt = new Date(
+                Date.now() + REFRESH_TOKEN_DURATION
+            );
+            admin.lastLoginAt = new Date();
+
+            await admin.save({ validateBeforeSave: false });
+
+            setAuthCookies(res, accessToken, refreshToken);
+
+            return res.status(200).json(
+                new ApiResponse(
+                    200,
+                    {
+                        admin: {
+                            _id: admin._id,
+                            name: admin.name,
+                            email: admin.email,
+                            avatar: admin.avatar,
+                            isActive: admin.isActive,
+                            lastLoginAt: admin.lastLoginAt,
+                        },
+                        type: "admin",
+                    },
+                    "Admin logged in successfully."
+                )
+            );
+        }
+    }
+
+    const userConditions = [];
+
+    if (normalizedEmail) {
+        userConditions.push({ email: normalizedEmail });
+    }
+
+    if (normalizedPhone) {
+        userConditions.push({ phoneNo: normalizedPhone });
+    }
+
+    const user = await User.findOne({
+        $or: userConditions,
+    }).select("+password +tokenVersion");
+
+    if (!user) {
+        throw new ApiError(401, "Invalid email or password.");
+    }
+
+    if (!["User", "recruiter"].includes(user.role)) {
+        throw new ApiError(403, "Invalid account role.");
+    }
+
+    if (user.accountStatus === "blocked") {
+        throw new ApiError(
+            403,
+            "Your account is blocked. Please contact support."
+        );
+    }
+
+    if (user.lockUntil && user.lockUntil > new Date()) {
+        const remainingTime = Math.ceil(
+            (user.lockUntil.getTime() - Date.now()) / 60000
+        );
+
+        throw new ApiError(
+            423,
+            `Account temporarily locked. Try again after ${remainingTime} minute(s).`
+        );
+    }
+
+    if (user.lockUntil && user.lockUntil <= new Date()) {
+        user.lockUntil = null;
+        user.failedLoginAttempts = 0;
+        await user.save({ validateBeforeSave: false });
+    }
+
+    if (!user.password) {
+        throw new ApiError(
+            400,
+            "This account does not have a password. Please use your social login."
+        );
+    }
+
+    const passwordCorrect = await user.isPasswordCorrect(password);
+
+    if (!passwordCorrect) {
+        user.failedLoginAttempts = (user.failedLoginAttempts || 0) + 1;
+
+        if (user.failedLoginAttempts >= MAX_LOGIN_ATTEMPTS) {
+            user.lockUntil = new Date(Date.now() + LOCK_DURATION);
+            await user.save({ validateBeforeSave: false });
+
+            throw new ApiError(
+                423,
+                "Too many failed login attempts. Account locked for 1 hour."
+            );
+        }
+
+        await user.save({ validateBeforeSave: false });
+
+        throw new ApiError(
+            401,
+            `Invalid email or password. ${
+                MAX_LOGIN_ATTEMPTS - user.failedLoginAttempts
+            } attempt(s) remaining.`
+        );
+    }
+
+    if (user.twoFactorEnabled) {
+        const twoFactorToken = jwt.sign(
+            {
+                userId: user._id.toString(),
+                type: user.role === "recruiter" ? "recruiter" : "user",
+                purpose: "login-2fa",
+                tokenVersion: user.tokenVersion || 0,
+            },
+            process.env.ACCESS_TOKEN_SECRET,
+            { expiresIn: "5m" }
+        );
+
+        return res.status(200).json(
+            new ApiResponse(
+                200,
+                {
+                    twoFactorRequired: true,
+                    twoFactorToken,
+                    userId: user._id,
+                    type: user.role === "recruiter" ? "recruiter" : "user",
+                },
+                "Two-factor authentication required."
+            )
+        );
+    }
+
+    const { session, accessToken, refreshToken, safeUser } =
+        await createUserSession(req, user);
+
+    setAuthCookies(res, accessToken, refreshToken);
+
+    const responseData = {
+        session: createSafeSession(session),
+        type: user.role === "recruiter" ? "recruiter" : "user",
+    };
+
+    if (user.role === "recruiter") {
+        responseData.recruiter = safeUser;
+    } else {
+        responseData.user = safeUser;
+    }
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            responseData,
+            user.role === "recruiter"
+                ? "Recruiter logged in successfully."
+                : "User logged in successfully."
+        )
+    );
+});
 
 const logoutCurrentUser = asyncHandler(async (req, res) => {
     const userId = req.user?._id;
     const sessionId = req.sessionId;
 
-    if (!userId || !sessionId) {
-        throw new ApiError(401, "Unauthorized Access Denied");
+    if (userId && sessionId) {
+        await Session.deleteOne({ _id: sessionId, userId });
+
+        const remainingSessions = await Session.exists({ userId });
+
+        if (!remainingSessions) {
+            await User.updateOne(
+                { _id: userId },
+                {
+                    $set: {
+                        isOnline: false,
+                        lastSeen: new Date(),
+                        lastSeenAt: new Date(),
+                    },
+                }
+            );
+        }
     }
 
-    const user = await User.findOneAndUpdate(
-        { _id: userId },
-        {
-            $unset: {
-                refreshToken: 1
-            }
-        },
-        {
-            returnDocument: "after"
-        }
+    clearAuthCookies(res);
+
+    return res.status(200).json(
+        new ApiResponse(200, {}, "User logged out successfully.")
+    );
+});
+
+const verifyAccount = asyncHandler(async (req, res) => {
+    const { otp } = req.body || {};
+    const userId = req.user?._id;
+
+    if (typeof otp !== "string" || !otp.trim()) {
+        throw new ApiError(400, "OTP is required.");
+    }
+
+    if (!userId) {
+        throw new ApiError(401, "Unauthorized.");
+    }
+
+    const user = await User.findById(userId).select(
+        "+emailVerificationOTP +emailVerificationOTPExpiry"
     );
 
     if (!user) {
-        throw new ApiError(404, "User Not Found");
+        throw new ApiError(404, "User not found.");
     }
 
-    const session = await Session.findByIdAndDelete(sessionId);
-
-    if (!session) {
-        throw new ApiError(404, "User Not Fount")
+    if (user.isVerified) {
+        throw new ApiError(400, "Account is already verified.");
     }
 
-    const cookieOption = {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "strict",
-    };
-
-    return res
-        .status(200)
-        .clearCookie("accessToken", cookieOption)
-        .clearCookie("refreshToken", cookieOption)
-        .json(
-            new ApiResponse(200, {}, "User Logged Out Successfully")
-        )
-})
-
-const verifyAccount = asyncHandler(async (req, res) => {
-    const { otp } = req.body;
-
-    if (!otp) {
-        throw new ApiError(400, "Otp required For Verificaition");
+    if (
+        !user.emailVerificationOTP ||
+        !user.emailVerificationOTPExpiry ||
+        user.emailVerificationOTPExpiry <= new Date()
+    ) {
+        throw new ApiError(400, "OTP is invalid or expired.");
     }
 
-    const userId = req.user?._id;
+    const valid = await bcrypt.compare(
+        otp.trim(),
+        user.emailVerificationOTP
+    );
 
-    if (!userId) {
-        throw new ApiError(401, "Unauthorized Access Denied");
+    if (!valid) {
+        throw new ApiError(400, "Invalid OTP.");
     }
 
-    const user = await User.findById(userId);
-
-    if (!user) {
-        throw new ApiError(404, "User not Found");
-    }
-
-    if (user.emailVerificationOTPExpiry < Date.now()) {
-        throw new ApiError(409, "Otp Already Expired");
-    }
-
-    const isOtpValid = bcrypt.compare(otp, user.emailVerificationOTP);
-
-    if (!isOtpValid) {
-        throw new ApiError(400, "Invalid Otp");
-    }
-
-    user.isVerified = true
+    user.isVerified = true;
     user.emailVerificationOTP = undefined;
     user.emailVerificationOTPExpiry = undefined;
 
     await user.save({ validateBeforeSave: false });
 
-    return res.status(200)
-        .json(
-            new ApiResponse(200, {}, "Hurry! Your Email Is Now Verified")
-        )
-})
+    return res.status(200).json(
+        new ApiResponse(200, {}, "Your email has been verified successfully.")
+    );
+});
 
 const sendVerifyAccountOtp = asyncHandler(async (req, res) => {
-    const userId = req.user._id;
+    const userId = req.user?._id;
 
     if (!userId) {
-        throw new ApiError(401, "Unauthorized Access Denied!");
+        throw new ApiError(401, "Unauthorized access denied.");
     }
 
-    const user = await User.findById(userId);
+    const user = await User.findById(userId).select(
+        "+emailVerificationOTP +emailVerificationOTPExpiry"
+    );
 
     if (!user) {
-        throw new ApiError(404, "User Not Found");
+        throw new ApiError(404, "User not found.");
     }
 
     if (user.isVerified) {
-        throw new ApiError(400, "User Already Verifed");
+        throw new ApiError(400, "User is already verified.");
     }
 
-    if (user.emailVerificationOTPExpiry && user.emailVerificationOTPExpiry > Date.now()) {
-        throw new ApiError(429, "Please Wait Before requesting Another Otp");
+    if (
+        user.emailVerificationOTPExpiry &&
+        user.emailVerificationOTPExpiry > new Date()
+    ) {
+        throw new ApiError(
+            429,
+            "Please wait before requesting another OTP."
+        );
     }
 
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otp = crypto.randomInt(100000, 1000000).toString();
 
-    const hashedOtp = await bcrypt.hash(otp, 10);
-
-    user.emailVerificationOTP = hashedOtp;
-    user.emailVerificationOTPExpiry = Date.now() + 2 * 60 * 1000;
+    user.emailVerificationOTP = await bcrypt.hash(otp, 10);
+    user.emailVerificationOTPExpiry = new Date(Date.now() + 2 * 60 * 1000);
 
     await user.save({ validateBeforeSave: false });
 
@@ -759,193 +608,68 @@ const sendVerifyAccountOtp = asyncHandler(async (req, res) => {
         await transporter.sendMail({
             from: process.env.SENDER_EMAIL,
             to: user.email,
-            subject: "Email Verification Otp",
+            subject: "Email Verification OTP",
             html: `
-         <h2>Email Verification</h2>
-         <p>Your OTP is:</p>
-         <h1>${otp}</h1>
-         <p>Valid for 2 minutes.</p>
-     `
-        })
-
-    } catch (error) {
+                <h2>Email Verification</h2>
+                <p>Your OTP is:</p>
+                <h1>${otp}</h1>
+                <p>Valid for 2 minutes.</p>
+            `,
+        });
+    } catch {
         user.emailVerificationOTP = undefined;
         user.emailVerificationOTPExpiry = undefined;
         await user.save({ validateBeforeSave: false });
 
-        throw new ApiError(500, "Failed To Send OTP For EmailVerification");
+        throw new ApiError(500, "Failed to send email verification OTP.");
     }
-    return res.status(200)
-        .json(
-            new ApiResponse(200, {}, "Otp Send To Email Successfully")
-        )
-})
-
-const forgetPassword = asyncHandler(async (req, res) => {
-    const {
-        password,
-        confirmPassword,
-        otp,
-    } = req.body;
-
-    if (!password || !confirmPassword || !otp) {
-        throw new ApiError(
-            400,
-            "OTP, Password And Confirm Password Are Required"
-        );
-    }
-
-    if (password !== confirmPassword) {
-        throw new ApiError(
-            400,
-            "Password And Confirm Password Do Not Match"
-        );
-    }
-
-    // Get reset token from HttpOnly cookie
-    const resetToken = req.cookies?.passwordResetToken;
-
-    if (!resetToken) {
-        throw new ApiError(
-            400,
-            "Password Reset Session Expired"
-        );
-    }
-
-    // Hash the token received from cookie
-    const hashedToken = crypto
-        .createHash("sha256")
-        .update(resetToken)
-        .digest("hex");
-
-    // Find user using hashed reset token
-    const user = await User.findOne({
-        passwordResetToken: hashedToken,
-        passwordResetTokenExpiresAt: {
-            $gt: Date.now(),
-        },
-    });
-
-    if (!user) {
-        throw new ApiError(
-            400,
-            "Invalid Or Expired Password Reset Session"
-        );
-    }
-
-    // Check OTP exists
-    if (
-        !user.forgetPasswordOtp ||
-        !user.forgetPasswordOtpExpiredAt
-    ) {
-        throw new ApiError(
-            400,
-            "Request OTP First"
-        );
-    }
-
-    // Check OTP expiration
-    if (
-        user.forgetPasswordOtpExpiredAt < Date.now()
-    ) {
-        throw new ApiError(
-            400,
-            "OTP Expired"
-        );
-    }
-
-    // Compare entered OTP with hashed OTP
-    const isOtpValid = await bcrypt.compare(
-        otp,
-        user.forgetPasswordOtp
-    );
-
-    if (!isOtpValid) {
-        throw new ApiError(
-            400,
-            "Invalid OTP"
-        );
-    }
-
-    // Update password
-    user.password = password;
-
-    // Remove OTP
-    user.forgetPasswordOtp = undefined;
-    user.forgetPasswordOtpExpiredAt = undefined;
-
-    // Remove reset token
-    user.passwordResetToken = undefined;
-    user.passwordResetTokenExpiresAt = undefined;
-
-    await user.save({
-        validateBeforeSave: false,
-    });
-
-    res.clearCookie("passwordResetToken", {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "lax",
-    });
 
     return res.status(200).json(
-        new ApiResponse(
-            200,
-            {},
-            "Password Updated Successfully"
-        )
+        new ApiResponse(200, {}, "OTP sent to email successfully.")
     );
 });
 
 const sendForgetPasswordOtp = asyncHandler(async (req, res) => {
-    const { email } = req.body;
+    const email =
+        typeof req.body?.email === "string"
+            ? req.body.email.trim().toLowerCase()
+            : "";
 
     if (!email) {
-        throw new ApiError(400, "Email Required");
+        throw new ApiError(400, "Email is required.");
     }
 
-    const user = await User.findOne({ email });
+    const user = await User.findOne({ email }).select(
+        "+forgetPasswordOtp +forgetPasswordOtpExpiredAt +passwordResetToken +passwordResetTokenExpiresAt"
+    );
 
     if (!user) {
-        throw new ApiError(404, "Account Not Found");
+        throw new ApiError(404, "Account not found.");
     }
 
     if (
         user.forgetPasswordOtpExpiredAt &&
-        user.forgetPasswordOtpExpiredAt > Date.now()
+        user.forgetPasswordOtpExpiredAt > new Date()
     ) {
         throw new ApiError(
             429,
-            "Please Wait Before Requesting Another OTP"
+            "Please wait before requesting another OTP."
         );
     }
 
     const otp = crypto.randomInt(100000, 1000000).toString();
+    const resetToken = crypto.randomBytes(32).toString("hex");
 
-    const hashedOtp = await bcrypt.hash(otp, 10);
+    user.passwordResetToken = hashToken(resetToken);
+    user.passwordResetTokenExpiresAt = new Date(
+        Date.now() + 10 * 60 * 1000
+    );
+    user.forgetPasswordOtp = await bcrypt.hash(otp, 10);
+    user.forgetPasswordOtpExpiredAt = new Date(
+        Date.now() + 2 * 60 * 1000
+    );
 
-    const resetToken = crypto
-        .randomBytes(32)
-        .toString("hex");
-
-    const hashedResetToken = crypto
-        .createHash("sha256")
-        .update(resetToken)
-        .digest("hex");
-
-    user.passwordResetToken = hashedResetToken;
-
-    user.passwordResetTokenExpiresAt =
-        Date.now() + 10 * 60 * 1000;
-
-    user.forgetPasswordOtp = hashedOtp;
-
-    user.forgetPasswordOtpExpiredAt =
-        Date.now() + 2 * 60 * 1000;
-
-    await user.save({
-        validateBeforeSave: false,
-    });
+    await user.save({ validateBeforeSave: false });
 
     try {
         await transporter.sendMail({
@@ -955,85 +679,150 @@ const sendForgetPasswordOtp = asyncHandler(async (req, res) => {
             html: `
                 <div>
                     <h2>Reset Your Password</h2>
-
                     <p>Your password reset OTP is:</p>
-
                     <h1>${otp}</h1>
-
                     <p>This OTP is valid for 2 minutes.</p>
-
-                    <p>
-                        If you did not request a password reset,
-                        please ignore this email.
-                    </p>
+                    <p>If you did not request a password reset, ignore this email.</p>
                 </div>
             `,
         });
-    } catch (error) {
+    } catch {
         user.forgetPasswordOtp = undefined;
         user.forgetPasswordOtpExpiredAt = undefined;
         user.passwordResetToken = undefined;
         user.passwordResetTokenExpiresAt = undefined;
+        await user.save({ validateBeforeSave: false });
 
-        await user.save({
-            validateBeforeSave: false,
-        });
-
-        throw new ApiError(
-            500,
-            "Failed To Send OTP"
-        );
+        throw new ApiError(500, "Failed to send OTP.");
     }
 
     res.cookie("passwordResetToken", resetToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "lax",
+        ...cookieOptions,
         maxAge: 10 * 60 * 1000,
     });
 
     return res.status(200).json(
-        new ApiResponse(
-            200,
-            null,
-            "Password Reset OTP Sent Successfully"
-        )
+        new ApiResponse(200, null, "Password reset OTP sent successfully.")
+    );
+});
+
+const forgetPassword = asyncHandler(async (req, res) => {
+    const { password, confirmPassword, otp } = req.body || {};
+
+    if (
+        typeof password !== "string" ||
+        typeof confirmPassword !== "string" ||
+        typeof otp !== "string" ||
+        !password ||
+        !confirmPassword ||
+        !otp.trim()
+    ) {
+        throw new ApiError(
+            400,
+            "OTP, password, and confirm password are required."
+        );
+    }
+
+    if (password !== confirmPassword) {
+        throw new ApiError(400, "Passwords do not match.");
+    }
+
+    if (password.length < 8 || Buffer.byteLength(password, "utf8") > 72) {
+        throw new ApiError(
+            400,
+            "Password must be at least 8 characters and no more than 72 UTF-8 bytes."
+        );
+    }
+
+    if (password.trim() !== password) {
+        throw new ApiError(
+            400,
+            "Password must not start or end with whitespace."
+        );
+    }
+
+    const resetToken = req.cookies?.passwordResetToken;
+
+    if (!resetToken) {
+        throw new ApiError(400, "Password reset session expired.");
+    }
+
+    const user = await User.findOne({
+        passwordResetToken: hashToken(resetToken),
+        passwordResetTokenExpiresAt: { $gt: new Date() },
+    }).select(
+        "+forgetPasswordOtp +forgetPasswordOtpExpiredAt +passwordResetToken +passwordResetTokenExpiresAt"
+    );
+
+    if (!user) {
+        throw new ApiError(400, "Invalid or expired password reset session.");
+    }
+
+    if (
+        !user.forgetPasswordOtp ||
+        !user.forgetPasswordOtpExpiredAt ||
+        user.forgetPasswordOtpExpiredAt <= new Date()
+    ) {
+        throw new ApiError(400, "OTP is invalid or expired.");
+    }
+
+    const valid = await bcrypt.compare(otp.trim(), user.forgetPasswordOtp);
+
+    if (!valid) {
+        throw new ApiError(400, "Invalid OTP.");
+    }
+
+    user.password = password;
+    user.forgetPasswordOtp = undefined;
+    user.forgetPasswordOtpExpiredAt = undefined;
+    user.passwordResetToken = undefined;
+    user.passwordResetTokenExpiresAt = undefined;
+    user.tokenVersion = (user.tokenVersion || 0) + 1;
+
+    await user.save({ validateBeforeSave: false });
+
+    await Session.deleteMany({ userId: user._id });
+
+    res.clearCookie("passwordResetToken", cookieOptions);
+    clearAuthCookies(res);
+
+    return res.status(200).json(
+        new ApiResponse(200, {}, "Password updated successfully.")
     );
 });
 
 const updateCoverImage = asyncHandler(async (req, res) => {
-    const coverImageLocalPath = req.file?.path;
+    const localPath = req.file?.path;
 
-    if (!coverImageLocalPath) {
-        throw new ApiError(400, "CoverImage File Required");
+    if (!localPath) {
+        throw new ApiError(400, "Cover image file is required.");
     }
 
     const userId = req.user?._id;
 
     if (!userId) {
-        throw new ApiError(401, "Unauthorized Access Denied");
+        throw new ApiError(401, "Unauthorized access denied.");
     }
 
     const user = await User.findById(userId);
 
     if (!user) {
-        throw new ApiError(404, "User Not Found");
+        throw new ApiError(404, "User not found.");
     }
 
-    const uploadCoverImage = await uploadOnCloudinary(coverImageLocalPath);
+    const uploaded = await uploadOnCloudinary(localPath);
 
-    if (!uploadCoverImage?.secure_url || !uploadCoverImage?.public_id) {
-        throw new ApiError(500, "Failed To Upload Cover Image")
+    if (!uploaded?.secure_url || !uploaded?.public_id) {
+        throw new ApiError(500, "Failed to upload cover image.");
     }
 
-        // delete old avatar
     if (user.coverImage?.public_id) {
-        await cloudinary.uploader.destroy(user.coverImage.public_id);
+        await cloudinary.v2.uploader.destroy(user.coverImage.public_id);
     }
 
     user.coverImage = {
-        url: uploadCoverImage.secure_url,
-        public_id: uploadCoverImage.public_id
+        url: uploaded.secure_url,
+        public_id: uploaded.public_id,
     };
 
     await user.save({ validateBeforeSave: false });
@@ -1041,48 +830,44 @@ const updateCoverImage = asyncHandler(async (req, res) => {
     return res.status(200).json(
         new ApiResponse(
             200,
-            {
-                coverImage: user.coverImage
-            },
-            "CoverImage Updated Successfully"
+            { coverImage: user.coverImage },
+            "Cover image updated successfully."
         )
     );
-})
+});
 
 const updateAvatar = asyncHandler(async (req, res) => {
-    const avatarLocalPath = req.file?.path;
+    const localPath = req.file?.path;
 
-    if (!avatarLocalPath) {
-        throw new ApiError(400, "Avatar File Required");
+    if (!localPath) {
+        throw new ApiError(400, "Avatar file is required.");
     }
 
     const userId = req.user?._id;
 
     if (!userId) {
-        throw new ApiError(401, "Unauthorized Access Denied");
+        throw new ApiError(401, "Unauthorized access denied.");
     }
 
     const user = await User.findById(userId);
 
     if (!user) {
-        throw new ApiError(404, "User Not Found");
+        throw new ApiError(404, "User not found.");
     }
 
+    const uploaded = await uploadOnCloudinary(localPath);
 
-    const uploadAvatar = await uploadOnCloudinary(avatarLocalPath);
-
-    if (!uploadAvatar?.secure_url || !uploadAvatar?.public_id) {
-        throw new ApiError(500, "Failed To Upload Avatar");
+    if (!uploaded?.secure_url || !uploaded?.public_id) {
+        throw new ApiError(500, "Failed to upload avatar.");
     }
-    
-    // delete old avatar
+
     if (user.avatar?.public_id) {
-        await cloudinary.uploader.destroy(user.avatar.public_id);
+        await cloudinary.v2.uploader.destroy(user.avatar.public_id);
     }
 
     user.avatar = {
-        url: uploadAvatar.secure_url,
-        public_id: uploadAvatar.public_id
+        url: uploaded.secure_url,
+        public_id: uploaded.public_id,
     };
 
     await user.save({ validateBeforeSave: false });
@@ -1090,10 +875,8 @@ const updateAvatar = asyncHandler(async (req, res) => {
     return res.status(200).json(
         new ApiResponse(
             200,
-            {
-                avatar: user.avatar
-            },
-            "Avatar Updated Successfully"
+            { avatar: user.avatar },
+            "Avatar updated successfully."
         )
     );
 });
@@ -1102,24 +885,34 @@ const sendDeleteAccountOtp = asyncHandler(async (req, res) => {
     const userId = req.user?._id;
 
     if (!userId) {
-        throw new ApiError(401, "Unauthorized Access Denied");
+        throw new ApiError(401, "Unauthorized access denied.");
     }
 
-    const user = await User.findById(userId);
+    const user = await User.findById(userId).select(
+        "+deleteAccountOtp +deleteAccountOtpExpiredAt"
+    );
 
     if (!user) {
-        throw new ApiError(404, "User Not Found");
+        throw new ApiError(404, "User not found.");
     }
 
-    if (user.deleteAccountOtpExpiredAt && user.deleteAccountOtpExpiredAt > Date.now()) {
-        throw new ApiError(429, "Please wait before requesting another OTP")
+    if (
+        user.deleteAccountOtpExpiredAt &&
+        user.deleteAccountOtpExpiredAt > new Date()
+    ) {
+        throw new ApiError(
+            429,
+            "Please wait before requesting another OTP."
+        );
     }
 
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otp = crypto.randomInt(100000, 1000000).toString();
 
-    const hashedOtp = await bcrypt.hash(otp, 10);
-    user.deleteAccountOtp = hashedOtp;
-    user.deleteAccountOtpExpiredAt = Date.now() + 2 * 60 * 1000;
+    user.deleteAccountOtp = await bcrypt.hash(otp, 10);
+    user.deleteAccountOtpExpiredAt = new Date(
+        Date.now() + 2 * 60 * 1000
+    );
+
     await user.save({ validateBeforeSave: false });
 
     try {
@@ -1128,101 +921,103 @@ const sendDeleteAccountOtp = asyncHandler(async (req, res) => {
             to: user.email,
             subject: "Delete Account OTP",
             html: `
-              <h2>Account Deletion Verification</h2>
-              <p>Use the OTP below to permanently delete your account.</p>
-              <h1>${otp}</h1>
-              <p>Valid for 2 minutes.</p>
-          `
-        })
-    } catch (error) {
+                <h2>Account Deletion Verification</h2>
+                <p>Use this OTP to permanently delete your account.</p>
+                <h1>${otp}</h1>
+                <p>Valid for 2 minutes.</p>
+            `,
+        });
+    } catch {
         user.deleteAccountOtp = undefined;
-        user.deleteAccountOtpExpiredAt = undefined,
-            await user.save({ validateBeforeSave: false })
-        throw new ApiError(500, "Failed To Send OTP");
-    }
-
-    return res.status(200)
-        .json(
-            new ApiResponse(200, {}, "OTP Send To Your Email Successfully")
-        )
-})
-
-const deleteAccount = asyncHandler(async (req, res) => {
-    const userId = req.user._id;
-
-    if (!userId) {
-        throw new ApiError(401, "Unauthorized Access Denied");
-    }
-
-    const user = await User.findById(userId);
-
-    if (!user) {
-        throw new ApiError(404, "User Not Found");
-    }
-
-    const { password, otp } = req.body
-
-    if (!password || !otp) {
-        throw new ApiError(400, "Password and OTP are required");
-    }
-
-    if (user.deleteAccountOtpExpiredAt < Date.now()) {
-        throw new ApiError(400, "Otp Expired")
-    }
-
-    const isOtpValid = await bcrypt.compare(otp, user.deleteAccountOtp);
-
-    if (!isOtpValid) {
-        throw new ApiError(400, "Invalid Otp");
-    }
-
-    const isPasswordCorrect = await user.isPasswordCorrect(password)
-
-    if (!isPasswordCorrect) {
-        throw new ApiError(400, "Invalid Password");
-    }
-
-    user.deleteAccountOtp = undefined,
-        user.deleteAccountOtpExpiredAt = undefined,
+        user.deleteAccountOtpExpiredAt = undefined;
         await user.save({ validateBeforeSave: false });
 
+        throw new ApiError(500, "Failed to send OTP.");
+    }
+
+    return res.status(200).json(
+        new ApiResponse(200, {}, "OTP sent to your email successfully.")
+    );
+});
+
+const deleteAccount = asyncHandler(async (req, res) => {
+    const userId = req.user?._id;
+    const { password, otp } = req.body || {};
+
+    if (!userId) {
+        throw new ApiError(401, "Unauthorized access denied.");
+    }
+
+    if (typeof password !== "string" || typeof otp !== "string" || !otp.trim()) {
+        throw new ApiError(400, "Password and OTP are required.");
+    }
+
+    const user = await User.findById(userId).select(
+        "+password +deleteAccountOtp +deleteAccountOtpExpiredAt"
+    );
+
+    if (!user) {
+        throw new ApiError(404, "User not found.");
+    }
+
+    if (
+        !user.deleteAccountOtp ||
+        !user.deleteAccountOtpExpiredAt ||
+        user.deleteAccountOtpExpiredAt <= new Date()
+    ) {
+        throw new ApiError(400, "OTP is invalid or expired.");
+    }
+
+    const otpValid = await bcrypt.compare(otp.trim(), user.deleteAccountOtp);
+
+    if (!otpValid) {
+        throw new ApiError(400, "Invalid OTP.");
+    }
+
+    if (!user.password) {
+        throw new ApiError(
+            400,
+            "This account has no password. Account deletion requires an alternate verification flow."
+        );
+    }
+
+    const passwordValid = await user.isPasswordCorrect(password);
+
+    if (!passwordValid) {
+        throw new ApiError(400, "Invalid password.");
+    }
+
+    await Session.deleteMany({ userId });
     await User.findByIdAndDelete(userId);
 
-    const cookieOptions = {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "strict",
-    };
+    clearAuthCookies(res);
+    res.clearCookie("passwordResetToken", cookieOptions);
 
-    return res.status(200)
-        .clearCookie("accessToken", cookieOptions)
-        .clearCookie("refreshToken", cookieOptions)
-        .json(
-            new ApiResponse(200, {}, "Account Deleted Successfully")
-        )
-})
+    return res.status(200).json(
+        new ApiResponse(200, {}, "Account deleted successfully.")
+    );
+});
 
 const changeName = asyncHandler(async (req, res) => {
-    const { name } = req.body;
+    const { name } = req.body || {};
 
-    if (!name || !name.trim()) {
-        throw new ApiError(400, "Name is required");
+    if (typeof name !== "string" || !name.trim()) {
+        throw new ApiError(400, "Name is required.");
     }
 
     const userId = req.user?._id;
 
     if (!userId) {
-        throw new ApiError(401, "Unauthorized Access Denied");
+        throw new ApiError(401, "Unauthorized access denied.");
     }
 
     const user = await User.findById(userId);
 
     if (!user) {
-        throw new ApiError(404, "User Not Found");
+        throw new ApiError(404, "User not found.");
     }
 
     user.name = name.trim();
-
     await user.save({ validateBeforeSave: false });
 
     return res.status(200).json(
@@ -1231,38 +1026,40 @@ const changeName = asyncHandler(async (req, res) => {
             {
                 _id: user._id,
                 name: user.name,
-                email: user.email
+                email: user.email,
             },
-            "Name updated successfully"
+            "Name updated successfully."
         )
     );
 });
 
 const fetchUser = asyncHandler(async (req, res) => {
-    const userId = req.user._id;
+    const userId = req.user?._id;
 
     if (!userId) {
-        throw new ApiError(401, "Unauthorized Access Denied");
+        throw new ApiError(401, "Unauthorized access denied.");
     }
 
-    const user = await User.findById(userId).select("-password -refreshToken")
+    const user = await getSafeUser(userId);
 
-    return res.status(200)
-        .json(
-            new ApiResponse(200, user, "Fethed User Successfully")
-        )
-})
+    if (!user) {
+        throw new ApiError(404, "User not found.");
+    }
+
+    return res.status(200).json(
+        new ApiResponse(200, user, "User fetched successfully.")
+    );
+});
 
 const googleAuth = asyncHandler(async (req, res) => {
-    const { credential, role } = req.body;
-
-    const ipAddress = req.ip;
+    const { credential, role } = req.body || {};
 
     if (!credential) {
-        throw new ApiError(
-            400,
-            "Google credential is required"
-        );
+        throw new ApiError(400, "Google credential is required.");
+    }
+
+    if (!process.env.GOOGLE_CLIENT_ID) {
+        throw new ApiError(500, "Google authentication is not configured.");
     }
 
     const ticket = await client.verifyIdToken({
@@ -1272,527 +1069,429 @@ const googleAuth = asyncHandler(async (req, res) => {
 
     const payload = ticket.getPayload();
 
-    if (!payload?.email) {
-        throw new ApiError(
-            400,
-            "Invalid Google Token"
-        );
+    if (!payload?.email || !payload?.sub) {
+        throw new ApiError(400, "Invalid Google token.");
     }
 
-    const {
-        sub: googleId,
-        email,
-        name,
-        picture,
-    } = payload;
+    if (payload.email_verified !== true) {
+        throw new ApiError(403, "Google email is not verified.");
+    }
 
-    const normalizedEmail = email
-        .toLowerCase()
-        .trim();
+    const googleId = payload.sub;
+    const normalizedEmail = payload.email.toLowerCase().trim();
+    const adminEmail = process.env.ADMIN_EMAIL?.toLowerCase().trim();
 
-    const adminEmail = process.env.ADMIN_EMAIL
-        ?.toLowerCase()
-        .trim();
-
-    if (
-        adminEmail &&
-        normalizedEmail === adminEmail
-    ) {
+    if (adminEmail && normalizedEmail === adminEmail) {
         throw new ApiError(
             403,
-            "Admin accounts can only login using email and password"
+            "Admin accounts can only log in using email and password."
         );
     }
 
-    const normalizedRole =
-        role === "recruiter"
-            ? "recruiter"
-            : "User";
+    const normalizedRole = role === "recruiter" ? "recruiter" : "User";
 
     let user = await User.findOne({
-        $or: [
-            { googleId },
-            { email: normalizedEmail },
-        ],
-    });
+        $or: [{ googleId }, { email: normalizedEmail }],
+    }).select("+tokenVersion +twoFactorSecret");
 
     if (!user) {
         user = await User.create({
             googleId,
-            name: name || "Google User",
+            name: payload.name || "Google User",
             email: normalizedEmail,
             role: normalizedRole,
             avatar: {
-                url: picture || "",
+                url: payload.picture || "",
                 public_id: "",
             },
             isVerified: true,
         });
+
+        user = await User.findById(user._id).select(
+            "+tokenVersion +twoFactorSecret"
+        );
     } else {
         if (!user.googleId) {
             user.googleId = googleId;
         }
 
-        if (!user.avatar?.url && picture) {
+        if (!user.avatar?.url && payload.picture) {
             user.avatar = {
-                url: picture,
+                url: payload.picture,
                 public_id: "",
             };
         }
 
         user.isVerified = true;
-
-        await user.save({
-            validateBeforeSave: false,
-        });
+        await user.save({ validateBeforeSave: false });
     }
 
-    const deviceInfo = req.deviceInfo || {};
+    if (!user) {
+        throw new ApiError(500, "Unable to load Google account.");
+    }
 
-    const userAgent =
-        req.headers["user-agent"] || "";
+    if (user.accountStatus === "blocked") {
+        throw new ApiError(403, "Your account is blocked.");
+    }
 
-    const session = await Session.create({
-        userId: user._id,
-        device: deviceInfo.device || "Unknown",
-        browser: deviceInfo.browser || "Unknown",
-        os: deviceInfo.os || "Unknown",
-        ipAddress,
-        userAgent,
-        lastActiveAt: new Date(),
-    });
+    if (user.twoFactorEnabled) {
+        const twoFactorToken = jwt.sign(
+            {
+                userId: user._id.toString(),
+                type: user.role === "recruiter" ? "recruiter" : "user",
+                purpose: "login-2fa",
+                tokenVersion: user.tokenVersion || 0,
+            },
+            process.env.ACCESS_TOKEN_SECRET,
+            { expiresIn: "5m" }
+        );
 
-    const accessToken =
-        user.generateAccessToken(session._id);
+        return res.status(200).json(
+            new ApiResponse(
+                200,
+                {
+                    twoFactorRequired: true,
+                    twoFactorToken,
+                    userId: user._id,
+                    type: user.role === "recruiter" ? "recruiter" : "user",
+                },
+                "Two-factor authentication required."
+            )
+        );
+    }
 
-    const refreshToken =
-        user.generateRefreshToken(session._id);
+    const { session, accessToken, refreshToken, safeUser } =
+        await createUserSession(req, user);
 
-    const hashedRefreshToken = crypto
-        .createHash("sha256")
-        .update(refreshToken)
-        .digest("hex");
-
-    session.refreshToken = hashedRefreshToken;
-
-    session.refreshTokenExpiresAt = new Date(
-        Date.now() +
-        7 * 24 * 60 * 60 * 1000
-    );
-
-    await session.save();
-
-    user.lastSeenAt = new Date();
-    user.isOnline = true;
-    user.failedLoginAttempts = 0;
-    user.lockUntil = null;
-
-    await user.save({
-        validateBeforeSave: false,
-    });
-
-    const safeSession = {
-        _id: session._id,
-        device: session.device,
-        browser: session.browser,
-        os: session.os,
-        ipAddress: session.ipAddress,
-        createdAt: session.createdAt,
-        lastActiveAt: session.lastActiveAt,
-    };
-
-    const cookieOptions = {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite:
-            process.env.NODE_ENV === "production"
-                ? "none"
-                : "lax",
-    };
-
-    res.cookie(
-        "accessToken",
-        accessToken,
-        {
-            ...cookieOptions,
-            maxAge: 15 * 60 * 1000,
-        }
-    );
-
-    res.cookie(
-        "refreshToken",
-        refreshToken,
-        {
-            ...cookieOptions,
-            maxAge: 7 * 24 * 60 * 60 * 1000,
-        }
-    );
-
-    const safeUser = await User.findById(
-        user._id
-    ).select(
-        "-password " +
-        "-refreshToken " +
-        "-forgetPasswordOtp " +
-        "-passwordResetToken " +
-        "-deleteAccountOtp " +
-        "-emailVerificationOTP " +
-        "-twoFactorSecret"
-    );
+    setAuthCookies(res, accessToken, refreshToken);
 
     return res.status(200).json(
         new ApiResponse(
             200,
             {
                 user: safeUser,
-                session: safeSession,
-                accessToken,
-                type: "user",
+                session: createSafeSession(session),
+                type: user.role === "recruiter" ? "recruiter" : "user",
             },
-            "Google authentication successful"
+            "Google authentication successful."
         )
     );
 });
 
 const enable2FA = asyncHandler(async (req, res) => {
-    const user = await User.findById(req.user._id);
+    const userId = req.user?._id;
+
+    if (!userId) {
+        throw new ApiError(401, "Unauthorized access denied.");
+    }
+
+    const user = await User.findById(userId).select(
+        "+twoFactorSecret +password"
+    );
 
     if (!user) {
-        throw new ApiError(404, "User Not Found");
+        throw new ApiError(404, "User not found.");
     }
 
-    // prevent accidental overwrite
-    if (user.twoFactorEnabled && user.twoFactorSecret) {
-        return res.status(400).json(
-            new ApiResponse(
-                400,
-                {},
-                "2FA already enabled"
-            )
-        );
+    if (user.twoFactorEnabled) {
+        throw new ApiError(400, "2FA is already enabled.");
     }
 
-    // generate secret
     const secret = speakeasy.generateSecret({
         name: user.email,
-        issuer: "MyApp"
+        issuer: PROJECT_NAME || "Peer.Hiring",
     });
 
-    // store ONLY base32 secret
     user.twoFactorSecret = secret.base32;
     user.twoFactorEnabled = false;
-    await user.save();
 
-    // build proper otpauth URL
+    await user.save({ validateBeforeSave: false });
+
     const otpauthURL = speakeasy.otpauthURL({
         secret: secret.base32,
         label: user.email,
-        issuer: "MyApp",
-        encoding: "base32"
+        issuer: PROJECT_NAME || "Peer.Hiring",
+        encoding: "base32",
     });
 
     const qrCodeUrl = await QRCode.toDataURL(otpauthURL);
 
-    return res.status(201).json(
+    return res.status(200).json(
         new ApiResponse(
-            201,
+            200,
             {
                 qrCodeUrl,
-                secret: secret.base32
+                secret: secret.base32,
             },
-            "Scan QR code in Authenticator App"
+            "Scan the QR code in your authenticator app, then verify the code."
         )
     );
 });
 
 const verify2FASetup = asyncHandler(async (req, res) => {
-    const { token } = req.body;
+    const { token } = req.body || {};
+    const userId = req.user?._id;
 
-    const user = await User.findById(req.user._id);
+    if (!userId) {
+        throw new ApiError(401, "Unauthorized access denied.");
+    }
+
+    if (typeof token !== "string" || !/^\d{6}$/.test(token.trim())) {
+        throw new ApiError(400, "A valid six-digit authentication code is required.");
+    }
+
+    const user = await User.findById(userId).select("+twoFactorSecret");
 
     if (!user) {
-        throw new ApiError(404, "User Not Found");
+        throw new ApiError(404, "User not found.");
+    }
+
+    if (user.twoFactorEnabled) {
+        throw new ApiError(400, "2FA is already enabled.");
     }
 
     if (!user.twoFactorSecret) {
-        return res.status(400).json(
-            new ApiResponse(400, {}, "2FA not initialized")
-        );
+        throw new ApiError(400, "2FA has not been initialized.");
     }
 
     const verified = speakeasy.totp.verify({
         secret: user.twoFactorSecret,
         encoding: "base32",
-        token: token.toString().trim(),
-        window: 1
-    });
-
-    if (!verified) {
-        throw new ApiError(400, "Invalid OTP");
-    }
-
-    user.twoFactorEnabled = true;
-    await user.save();
-
-    return res.status(200).json(
-        new ApiResponse(200, "2FA enabled successfully")
-    );
-});
-
-const verify2FALogin = asyncHandler(async (req, res) => {
-    const { userId, token } = req.body;
-
-    if (!userId || !token) {
-        throw new ApiError(
-            400,
-            "User ID and authentication code are required"
-        );
-    }
-
-    const user = await User.findById(userId);
-
-    if (!user || !user.twoFactorSecret) {
-        throw new ApiError(400, "Invalid request");
-    }
-
-    // --------------------------------------------
-    // 1. Verify 2FA OTP
-    // --------------------------------------------
-
-    const verified = speakeasy.totp.verify({
-        secret: user.twoFactorSecret,
-        encoding: "base32",
-        token: token.toString().trim(),
+        token: token.trim(),
         window: 1,
     });
 
     if (!verified) {
-        throw new ApiError(400, "Invalid OTP");
+        throw new ApiError(400, "Invalid authentication code.");
     }
 
-    // --------------------------------------------
-    // 2. Device / Session information
-    // --------------------------------------------
+    user.twoFactorEnabled = true;
+    await user.save({ validateBeforeSave: false });
 
-    const ipAddress = req.ip;
+    return res.status(200).json(
+        new ApiResponse(200, {}, "2FA enabled successfully.")
+    );
+});
 
-    const deviceInfo = req.deviceInfo || {};
+const verify2FALogin = asyncHandler(async (req, res) => {
+    const { twoFactorToken, userId, token } = req.body || {};
 
-    const userAgent =
-        req.headers["user-agent"] || "";
+    if (
+        typeof twoFactorToken !== "string" ||
+        typeof token !== "string" ||
+        !/^\d{6}$/.test(token.trim())
+    ) {
+        throw new ApiError(
+            400,
+            "The temporary authentication token and six-digit code are required."
+        );
+    }
 
-    // --------------------------------------------
-    // 3. Create Session
-    // --------------------------------------------
+    let decoded;
 
-    const session = await Session.create({
-        userId: user._id,
+    try {
+        decoded = jwt.verify(
+            twoFactorToken,
+            process.env.ACCESS_TOKEN_SECRET
+        );
+    } catch {
+        throw new ApiError(401, "The two-factor login token is invalid or expired.");
+    }
 
-        device:
-            deviceInfo.device || "Unknown",
+    if (
+        decoded.purpose !== "login-2fa" ||
+        !decoded.userId ||
+        (userId && decoded.userId !== userId.toString())
+    ) {
+        throw new ApiError(401, "Invalid two-factor login token.");
+    }
 
-        browser:
-            deviceInfo.browser || "Unknown",
+    const user = await User.findById(decoded.userId).select(
+        "+twoFactorSecret +tokenVersion"
+    );
 
-        os:
-            deviceInfo.os || "Unknown",
+    if (!user || !user.twoFactorEnabled || !user.twoFactorSecret) {
+        throw new ApiError(401, "Invalid two-factor login request.");
+    }
 
-        ipAddress,
+    if ((decoded.tokenVersion || 0) !== (user.tokenVersion || 0)) {
+        throw new ApiError(401, "The two-factor login token has been revoked.");
+    }
 
-        userAgent,
+    if (user.accountStatus === "blocked") {
+        throw new ApiError(403, "Your account is blocked.");
+    }
 
-        lastActiveAt: new Date(),
+    const verified = speakeasy.totp.verify({
+        secret: user.twoFactorSecret,
+        encoding: "base32",
+        token: token.trim(),
+        window: 1,
     });
 
-    // --------------------------------------------
-    // 4. Generate tokens
-    // --------------------------------------------
+    if (!verified) {
+        throw new ApiError(400, "Invalid authentication code.");
+    }
 
-    const accessToken =
-        user.generateAccessToken(session._id);
+    const { session, accessToken, refreshToken, safeUser } =
+        await createUserSession(req, user);
 
-    const refreshToken =
-        user.generateRefreshToken(session._id);
-
-    // --------------------------------------------
-    // 5. Hash refresh token
-    // --------------------------------------------
-
-    const hashedRefreshToken = crypto
-        .createHash("sha256")
-        .update(refreshToken)
-        .digest("hex");
-
-    session.refreshToken = hashedRefreshToken;
-
-    session.refreshTokenExpiresAt = new Date(
-        Date.now() +
-            7 * 24 * 60 * 60 * 1000
-    );
-
-    await session.save();
-
-    // --------------------------------------------
-    // 6. Update user login information
-    // --------------------------------------------
-
-    user.failedLoginAttempts = 0;
-    user.lockUntil = null;
-    user.lastSeenAt = new Date();
-    user.isOnline = true;
-
-    await user.save({
-        validateBeforeSave: false,
-    });
-
-    // --------------------------------------------
-    // 7. Safe session
-    // --------------------------------------------
-
-    const safeSession = {
-        _id: session._id,
-        device: session.device,
-        browser: session.browser,
-        os: session.os,
-        ipAddress: session.ipAddress,
-        createdAt: session.createdAt,
-        lastActiveAt: session.lastActiveAt,
-    };
-
-    // --------------------------------------------
-    // 8. Safe user
-    // --------------------------------------------
-
-    const safeUser = await User.findById(
-        user._id
-    ).select(
-        "-password " +
-        "-refreshToken " +
-        "-forgetPasswordOtp " +
-        "-passwordResetToken " +
-        "-deleteAccountOtp " +
-        "-emailVerificationOTP " +
-        "-twoFactorSecret"
-    );
-
-    // --------------------------------------------
-    // 9. Cookies
-    // --------------------------------------------
-
-    const cookieOptions = {
-        httpOnly: true,
-
-        secure:
-            process.env.NODE_ENV === "production",
-
-        sameSite:
-            process.env.NODE_ENV === "production"
-                ? "none"
-                : "lax",
-    };
-
-    res.cookie(
-        "accessToken",
-        accessToken,
-        {
-            ...cookieOptions,
-            maxAge: 15 * 60 * 1000,
-        }
-    );
-
-    res.cookie(
-        "refreshToken",
-        refreshToken,
-        {
-            ...cookieOptions,
-            maxAge:
-                7 *
-                24 *
-                60 *
-                60 *
-                1000,
-        }
-    );
-
-    // --------------------------------------------
-    // 10. Response
-    // --------------------------------------------
+    setAuthCookies(res, accessToken, refreshToken);
 
     return res.status(200).json(
         new ApiResponse(
             200,
             {
                 user: safeUser,
-                session: safeSession,
-                accessToken,
-                type: "user",
+                session: createSafeSession(session),
+                type: user.role === "recruiter" ? "recruiter" : "user",
             },
-            "2FA login successful"
+            "Two-factor login successful."
         )
     );
 });
 
 const refreshAccessToken = asyncHandler(async (req, res) => {
     const incomingRefreshToken =
-        req.cookies?.refreshToken ||
-        req.body?.refreshToken;
+        req.cookies?.refreshToken || req.body?.refreshToken;
 
     if (!incomingRefreshToken) {
-        throw new ApiError(401, "Unauthorized Access Denied");
+        throw new ApiError(401, "Refresh token is required.");
+    }
+
+    if (!process.env.REFRESH_TOKEN_SECRET) {
+        throw new ApiError(500, "Refresh token secret is not configured.");
     }
 
     let decodedToken;
 
     try {
-        decodedToken = JWT.verify(
+        decodedToken = jwt.verify(
             incomingRefreshToken,
             process.env.REFRESH_TOKEN_SECRET
         );
-    } catch (error) {
-        console.log(error);
-        throw new ApiError(
-            401,
-            "Invalid or Expired Refresh Token"
+    } catch {
+        throw new ApiError(401, "Invalid or expired refresh token.");
+    }
+
+    if (decodedToken.type === "admin" && decodedToken.adminId) {
+        const admin = await Admin.findById(decodedToken.adminId).select(
+            "+refreshToken +refreshTokenExpiresAt"
         );
-    }
 
-    const user = await User.findById(decodedToken?._id);
+        if (
+            !admin ||
+            !admin.isActive ||
+            !admin.refreshToken ||
+            admin.refreshToken !== hashToken(incomingRefreshToken) ||
+            !admin.refreshTokenExpiresAt ||
+            admin.refreshTokenExpiresAt <= new Date()
+        ) {
+            throw new ApiError(401, "Admin session expired. Please log in again.");
+        }
 
-    if (!user) {
-        throw new ApiError(404, "User Not Found");
-    }
-
-    if (incomingRefreshToken !== user.refreshToken) {
-        throw new ApiError(
-            401,
-            "Refresh Token Is Expired Or Already Used"
+        const accessToken = jwt.sign(
+            {
+                adminId: admin._id.toString(),
+                type: "admin",
+            },
+            process.env.ACCESS_TOKEN_SECRET,
+            {
+                expiresIn: process.env.ACCESS_TOKEN_EXPIRY || "15m",
+            }
         );
-    }
 
-    const { accessToken, refreshToken } =
-        await generateAccessAndRefreshToken(user._id);
+        const refreshToken = jwt.sign(
+            {
+                adminId: admin._id.toString(),
+                type: "admin",
+            },
+            process.env.REFRESH_TOKEN_SECRET,
+            {
+                expiresIn: process.env.REFRESH_TOKEN_EXPIRY || "30d",
+            }
+        );
 
-    const cookieOption = {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "strict",
-        maxAge: 7 * 24 * 60 * 60 * 1000,
-    };
+        admin.refreshToken = hashToken(refreshToken);
+        admin.refreshTokenExpiresAt = new Date(
+            Date.now() + REFRESH_TOKEN_DURATION
+        );
 
-    return res
-        .status(200)
-        .cookie("accessToken", accessToken, cookieOption)
-        .cookie("refreshToken", refreshToken, cookieOption)
-        .json(
+        await admin.save({ validateBeforeSave: false });
+
+        setAuthCookies(res, accessToken, refreshToken);
+
+        return res.status(200).json(
             new ApiResponse(
                 200,
-                {
-                    accessToken,
-                    refreshToken,
-                },
-                "Access Token Refreshed Successfully"
+                { accessToken, type: "admin" },
+                "Admin access token refreshed successfully."
             )
         );
+    }
+
+    const userId = decodedToken?._id;
+    const sessionId = decodedToken?.sessionId;
+
+    if (!userId || !sessionId) {
+        throw new ApiError(401, "Invalid refresh token payload.");
+    }
+
+    const session = await Session.findOne({
+        _id: sessionId,
+        userId,
+        refreshToken: hashToken(incomingRefreshToken),
+        refreshTokenExpiresAt: { $gt: new Date() },
+        isActive: true,
+    }).select("+refreshToken");
+
+    if (!session) {
+        throw new ApiError(
+            401,
+            "Session expired or revoked. Please log in again."
+        );
+    }
+
+    const user = await User.findById(userId).select("+tokenVersion");
+
+    if (!user) {
+        await Session.deleteOne({ _id: sessionId });
+        throw new ApiError(401, "User account not found.");
+    }
+
+    if (user.accountStatus && user.accountStatus !== "active") {
+        await Session.deleteOne({ _id: sessionId });
+        throw new ApiError(403, "Your account is not active.");
+    }
+
+    if (
+        decodedToken.tokenVersion !== undefined &&
+        decodedToken.tokenVersion !== (user.tokenVersion || 0)
+    ) {
+        await Session.deleteOne({ _id: sessionId });
+        throw new ApiError(401, "Session revoked. Please log in again.");
+    }
+
+    const accessToken = await user.generateAccessToken(sessionId.toString());
+    const refreshToken = await user.generateRefreshToken(sessionId.toString());
+
+    session.refreshToken = hashToken(refreshToken);
+    session.refreshTokenExpiresAt = new Date(
+        Date.now() + REFRESH_TOKEN_DURATION
+    );
+    session.lastActiveAt = new Date();
+
+    await session.save();
+
+    setAuthCookies(res, accessToken, refreshToken);
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            { accessToken },
+            "Access token refreshed successfully."
+        )
+    );
 });
 
 export {
@@ -1813,5 +1512,5 @@ export {
     enable2FA,
     verify2FALogin,
     verify2FASetup,
-    refreshAccessToken
-}
+    refreshAccessToken,
+};

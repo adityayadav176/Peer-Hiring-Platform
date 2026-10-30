@@ -15,6 +15,18 @@ import { Message } from "../models/message.model.js";
 import Admin from "../models/admin.model.js"
 import {uploadOnCloudinary} from "../utils/cloudinary.js"
 
+const setAuthCookies = (res, accessToken, refreshToken) => {
+    res.cookie("accessToken", accessToken, {
+        ...cookieOptions,
+        maxAge: ACCESS_TOKEN_DURATION,
+    });
+
+    res.cookie("refreshToken", refreshToken, {
+        ...cookieOptions,
+        maxAge: REFRESH_TOKEN_DURATION,
+    });
+};
+
 const getAllUsers = asyncHandler(async (req, res) => {
   const {
     page = 1,
@@ -1277,46 +1289,192 @@ const updateAdminAvatar = asyncHandler(async (req, res) => {
 
 
 const getAdminProfile = asyncHandler(async (req, res) => {
-    const admin = await Admin.findOne({
-        singletonKey: "PEER_HIRING_OWNER",
-    }).select("-password");
+  const admin = req.admin;
 
-    if (!admin) {
-        throw new ApiError(404, "Admin Not Found");
-    }
+  if (!admin) {
+    throw new ApiError(401, "Admin authentication required");
+  }
 
-    return res.status(200).json(
-        new ApiResponse(
-            200,
-            {
-                admin,
-            },
-            "Admin Profile Fetched Successfully"
-        )
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      {
+        admin: {
+          _id: admin._id,
+          name: admin.name,
+          email: admin.email,
+          avatar: admin.avatar,
+          isActive: admin.isActive,
+          lastLoginAt: admin.lastLoginAt,
+          createdAt: admin.createdAt,
+        },
+      },
+      "Admin Profile Fetched Successfully"
+    )
+  );
+});
+
+const adminLogout = asyncHandler(async (req, res) => {
+  const cookieOptions = {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite:
+      process.env.NODE_ENV === "production" ? "none" : "lax",
+    path: "/",
+  };
+
+  return res
+    .clearCookie("accessToken", cookieOptions)
+    .clearCookie("refreshToken", cookieOptions)
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        {},
+        "Admin Logged Out Successfully"
+      )
     );
 });
 
+const hashRefreshToken = (token) =>
+  crypto.createHash("sha256").update(token).digest("hex");
 
+const refreshAdminAccessToken = asyncHandler(
+  async (req, res) => {
+    const incomingRefreshToken =
+      req.cookies?.refreshToken;
 
-const adminLogout = asyncHandler(async (req, res) => {
-    const cookieOptions = {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "strict",
-        path: "/",
-    };
+    if (!incomingRefreshToken) {
+      throw new ApiError(
+        401,
+        "Admin refresh token is missing. Please log in again."
+      );
+    }
 
-    return res
-        .status(200)
-        .clearCookie("accessToken", cookieOptions)
-        .json(
-            new ApiResponse(
-                200,
-                {},
-                "Admin Logged Out Successfully"
-            )
-        );
-});
+    let decodedToken;
+
+    try {
+      decodedToken = jwt.verify(
+        incomingRefreshToken,
+        process.env.REFRESH_TOKEN_SECRET
+      );
+    } catch {
+      throw new ApiError(
+        401,
+        "Admin refresh token is invalid or expired. Please log in again."
+      );
+    }
+
+    // Ensure this is an admin refresh token.
+    if (
+      decodedToken.type !== "admin" ||
+      !decodedToken.adminId
+    ) {
+      throw new ApiError(
+        401,
+        "Invalid admin refresh token"
+      );
+    }
+
+    // Load the admin and explicitly select the hidden hash.
+    const admin = await Admin.findById(
+      decodedToken.adminId
+    ).select("+refreshToken");
+
+    if (!admin || !admin.isActive) {
+      throw new ApiError(
+        401,
+        "Admin account is unavailable. Please log in again."
+      );
+    }
+
+    const incomingHash =
+      hashRefreshToken(incomingRefreshToken);
+
+    const storedHash = admin.refreshToken || "";
+
+    // Compare the stored hash with the presented token's hash.
+    const hashesMatch =
+      storedHash.length === incomingHash.length &&
+      storedHash.length > 0 &&
+      crypto.timingSafeEqual(
+        Buffer.from(storedHash, "hex"),
+        Buffer.from(incomingHash, "hex")
+      );
+
+    if (
+      !hashesMatch ||
+      !admin.refreshTokenExpiresAt ||
+      admin.refreshTokenExpiresAt <= new Date()
+    ) {
+      throw new ApiError(
+        401,
+        "Admin refresh session is invalid or expired. Please log in again."
+      );
+    }
+
+    // Rotate both tokens.
+    const newAccessToken = jwt.sign(
+      {
+        adminId: admin._id.toString(),
+        type: "admin",
+      },
+      process.env.ACCESS_TOKEN_SECRET,
+      {
+        expiresIn:
+          process.env.ACCESS_TOKEN_EXPIRY || "15m",
+      }
+    );
+
+    const newRefreshToken = jwt.sign(
+      {
+        adminId: admin._id.toString(),
+        type: "admin",
+      },
+      process.env.REFRESH_TOKEN_SECRET,
+      {
+        expiresIn:
+          process.env.REFRESH_TOKEN_EXPIRY || "30d",
+      }
+    );
+
+    // Store the new hash, never the raw refresh token.
+    admin.refreshToken = hashRefreshToken(
+      newRefreshToken
+    );
+
+    admin.refreshTokenExpiresAt = new Date(
+      Date.now() + REFRESH_TOKEN_DURATION
+    );
+
+    await admin.save({ validateBeforeSave: false });
+
+    setAuthCookies(
+      res,
+      newAccessToken,
+      newRefreshToken
+    );
+
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        {
+          admin: {
+            _id: admin._id,
+            name: admin.name,
+            email: admin.email,
+            avatar: admin.avatar,
+            isActive: admin.isActive,
+            lastLoginAt: admin.lastLoginAt,
+          },
+          type: "admin",
+        },
+        "Admin session refreshed successfully"
+      )
+    );
+  }
+);
+
 
 export {
     getAdminDashboardStats,
@@ -1325,6 +1483,7 @@ export {
     verifyCompany,
     rejectCompany,
     blockCompany,
+    refreshAdminAccessToken,
     getCompanyById,
     getAllAdminCompanies,
     getUserById,

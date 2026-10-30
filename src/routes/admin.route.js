@@ -28,6 +28,7 @@ import {
   updateUserStatus,
   verifyCompany,
 } from "../controllers/admin.controller.js";
+import { refreshAccessToken } from "../controllers/user.controllers.js";
 
 const router = Router();
 
@@ -81,5 +82,10 @@ router.patch(
 );
 
 router.post("/logout", adminAuth, adminLogout);
+
+router.post(
+  "/refresh-admin-token",
+  refreshAccessToken
+);
 
 export default router;

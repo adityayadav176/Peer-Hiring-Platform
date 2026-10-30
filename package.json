@@ -16,6 +16,7 @@
     "bcrypt": "^6.0.0",
     "bullmq": "^6.3.4",
     "cloudinary": "^2.10.0",
+    "cookie": "^2.0.1",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "crypto": "^1.0.1",

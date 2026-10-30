@@ -1,3 +1,4 @@
+
 import mongoose from "mongoose";
 
 import { Conversation } from "../models/converstion.model.js";
@@ -8,36 +9,58 @@ import { socketAuth } from "./socket.auth.js";
 import { setIo } from "./socket.manager.js";
 import { authorizeInterviewRoom } from "../services/interviewRoom.service.js";
 
+const getReferenceId = (value) => {
+    if (!value) return null;
+
+    const id = value._id ?? value;
+
+    return id?.toString?.() ?? null;
+};
+
+const isValidObjectId = (value) =>
+    typeof value === "string" &&
+    mongoose.isValidObjectId(value);
+
+const getUserName = (user) =>
+    user?.name ||
+    user?.fullname ||
+    user?.username ||
+    "Someone";
+
+const MESSAGE_POPULATE_FIELDS =
+    "name fullname username email avatar avatarUrl profileImage profilePicture photo";
+
 export const initializeSocket = (io) => {
     setIo(io);
     io.use(socketAuth);
+
+    // Tracks active socket connections for each authenticated user.
     const onlineUsers = new Map();
 
-
     io.on("connection", async (socket) => {
-        console.log("User connected:", socket.id);
+        const rawUserId = socket.userId ?? socket.user?._id;
+        const userId = getReferenceId(rawUserId);
 
+        // Every authenticated socket must have a valid MongoDB user ID.
+        if (!userId || !isValidObjectId(userId)) {
+            console.error("[Socket] Invalid authenticated user:", {
+                socketId: socket.id,
+            });
 
-        const userId = socket.user._id.toString();
+            socket.disconnect(true);
+            return;
+        }
 
-        // IMPORTANT:
-        // Used by typing_start / typing_stop
         socket.userId = userId;
 
-        console.log("User ID:", userId);
+        console.log("[Socket] Connected:", {
+            socketId: socket.id,
+            userId,
+            transport: socket.conn.transport.name,
+        });
 
-        // JOIN PERSONAL USER ROOM
-
-        const userRoom = userId;
-
-        socket.join(userRoom);
-
-        console.log(
-            `User joined personal room: ${userRoom}`
-        );
-
-
-        // ADD USER TO ONLINE USERS
+        // Personal room for notifications and message receipts.
+        await socket.join(userId);
 
         let isFirstConnection = false;
 
@@ -48,2242 +71,1054 @@ export const initializeSocket = (io) => {
 
         onlineUsers.get(userId).add(socket.id);
 
-        console.log(
-            "Online users:",
-            [...onlineUsers.entries()].map(
-                ([id, sockets]) => ({
-                    userId: id,
-                    sockets: [...sockets],
-                })
-            )
-        );
-
-        // UPDATE USER ONLINE STATUS
+        socket.emit("online_users", {
+            userIds: [...onlineUsers.keys()],
+        });
 
         if (isFirstConnection) {
             try {
-                await awaitUserOnline(userId);
+                await setUserOnline(userId);
+                socket.broadcast.emit("user_online", { userId });
             } catch (error) {
                 console.error(
-                    "Failed to update online status:",
+                    "[Socket] Failed to set user online:",
                     error.message
                 );
             }
         }
 
-        // TELL THIS USER WHO IS ONLINE
+        const emitSocketError = (event, error) => {
+            console.error(`[Socket] ${event} error:`, error.message);
 
-        socket.emit("online_users", {
-            userIds: [...onlineUsers.keys()],
-        });
+            socket.emit("socket_error", {
+                event,
+                message: error.message || "Operation failed",
+            });
+        };
 
-        // TELL OTHER USERS THIS USER IS ONLINE
-        // ONLY FIRST CONNECTION
+        const requireValue = (value, label) => {
+            if (value === undefined || value === null || value === "") {
+                throw new Error(`${label} is required`);
+            }
+        };
 
-        if (isFirstConnection) {
-            socket.broadcast.emit("user_online", {
+        const requireBoolean = (value, label) => {
+            if (typeof value !== "boolean") {
+                throw new Error(`${label} must be a boolean`);
+            }
+        };
+
+        const requireValidId = (value, label) => {
+            if (!isValidObjectId(value)) {
+                throw new Error(`A valid ${label} is required`);
+            }
+        };
+
+        // ---------------------------------------------------------
+        // CONVERSATION HELPERS
+        // ---------------------------------------------------------
+
+        const isConversationParticipant = (conversation) =>
+            conversation.participants.some(
+                (participant) => getReferenceId(participant) === userId
+            );
+
+        const getActiveConversation = async (conversationId) => {
+            requireValidId(conversationId, "conversation ID");
+
+            const conversation =
+                await Conversation.findById(conversationId);
+
+            if (!conversation) {
+                throw new Error("Conversation not found");
+            }
+
+            if (conversation.isDeleted) {
+                throw new Error("Conversation is deleted");
+            }
+
+            if (!isConversationParticipant(conversation)) {
+                throw new Error(
+                    "You are not a participant of this conversation"
+                );
+            }
+
+            return conversation;
+        };
+
+        const requireConversationRoom = async (conversationId) => {
+            const conversation =
+                await getActiveConversation(conversationId);
+
+            const roomName = conversation._id.toString();
+
+            if (!socket.rooms.has(roomName)) {
+                throw new Error(
+                    "Join the conversation before performing this action"
+                );
+            }
+
+            return { conversation, roomName };
+        };
+
+        // ---------------------------------------------------------
+        // INTERVIEW HELPERS
+        // ---------------------------------------------------------
+
+        const getInterviewContext = async (interviewId) => {
+            requireValidId(interviewId, "interview ID");
+
+            const interview = await authorizeInterviewRoom({
+                interviewId,
                 userId,
             });
-        }
 
-        // JOIN INTERVIEW
-
-        socket.on("join_interview", async ({ interviewRoomId }) => {
-            try {
-                if (!interviewRoomId) {
-                    socket.emit("interview_error", {
-                        message: "interview RoomId is required"
-                    });
-
-                    return;
-                }
-
-                const userId = socket.user._id;
-
-                const interview = await authorizeInterviewRoom({
-                    interviewRoomId,
-                    userId
-                })
-
-                const roomName = `interview:${interview.interviewRoomId}`;
-
-                socket.join(roomName);
-
-                const isCandidate = interview.candidate.toString() === userId.toString();
-
-                const role = isCandidate ? "candidate" : "recruiter";
-
-                socket.emit("interview_joined", {
-                    interviewId: interview._id,
-                    interviewRoomId: interview.interviewRoomId,
-                    role
-                });
-
-                socket.io(roomName).emit("interview_user_joined", {
-                    userId,
-                    role
-                });
-
-            } catch (error) {
-                socket.emit("interview_error", {
-                    message: error.message
-                })
+            if (!interview) {
+                throw new Error(
+                    "Interview not found or access denied"
+                );
             }
-        })
 
-         // WEBRTC OFFER
+            const candidateId = getReferenceId(interview.candidate);
+            const recruiterId = getReferenceId(interview.recruiter);
 
-        socket.on("offer", async (data) => {
-            try {
-                const { interviewRoomId, offer } = data || {};
+            let role;
 
-                if (!interviewRoomId || !offer) {
-                    return socket.emit("socket_error", {
-                        event: "offer",
-                        message: "Interview ID and offer are required"
-                    })
-                }
-
-                const userId = socket.user._id;
-
-                const interview = await authorizeInterviewRoom({
-                    interviewRoomId,
-                    userId
-                });
-
-                const interviewRoom = `interview:${interview.interviewRoomId.toString()}`;
-
-                if (!socket.rooms.has(interviewRoom)) {
-                    return socket.emit("socket_error", {
-                        event: "offer",
-                        message: "you have not joined this interview"
-                    })
-                };
-
-                socket.to(interviewRoom).emit("offer", {
-                    userId: userId.toString(),
-                    offer
-                });
-
-                console.log(`WebRTC offer sent by ${userId} in ${interviewRoom}`);
-            } catch (error) {
-                console.error("webRTC offer error: ", error.message);
-
-                socket.emit("socket_error", {
-                    event: "offer",
-                    message: "Failed to send webRTC offer"
-                })
+            if (candidateId === userId) {
+                role = "candidate";
+            } else if (recruiterId === userId) {
+                role = "recruiter";
+            } else {
+                throw new Error(
+                    "You are not authorized to join this interview"
+                );
             }
-        })
 
-        
+            const canonicalInterviewId = interview._id.toString();
 
-        // WEBRTC ANSWER
-
-        socket.on("answer", async (data) => {
-            try {
-                const { interviewRoomId, answer } = data || {};
-
-                if (!interviewRoomId || !answer) {
-                    socket.emit("socket_error", {
-                        event: "answer",
-                        message: "InterviewRoomId or Answer is required"
-                    })
-                }
-
-                const userId = socket.user_id;
-
-                const interview = await authorizeInterviewRoom({
-                    interviewRoomId,
-                    userId
-                });
-
-                const interviewRoom = `interview:${interview.interviewRoomId.toString()}`;
-
-                if (!socket.rooms.has(interviewRoom)) {
-                    socket.emit("socket_error", {
-                        event: "answer",
-                        message: "You have not joined this interview"
-                    })
-                };
-
-                socket.to(interviewRoom).emit("answer", {
-                    userId: userId.toString(),
-                    answer
-                });
-
-                console.log(`webRTC answer sent by: ${userId} in ${interviewRoom}`);
-            } catch (error) {
-                console.error("socket_error", {
-                    event: "answer",
-                    message: "Failed to send webRTC answer"
-                })
-            }
-        })
-
-        
-        // ICE_CANDIDATE
-
-        socket.on("ice_candidate", async (data) => {
-            try {
-                const { interviewRoomId, candidate } = data || {};
-
-                if (!interviewRoomId || !candidate) {
-                    socket.emit("socket_error", {
-                        event: "ice_candidate",
-                        message: "interviewRoom Id OR candidate are required"
-                    })
-                }
-
-                const userId = socket.user._id;
-
-                const interview = await authorizeInterviewRoom({
-                    interviewRoomId, candidate
-                });
-
-                const interviewRoom = `interview:${interview.interviewRoomId.toString()}`;
-
-                if (!socket.rooms.has(interviewRoom)) {
-                    socket.emit("socket_error", {
-                        event: "ice_candidate",
-                        message: "You are not joined this interview"
-                    })
-                };
-
-                socket.to(interviewRoom).emit("ice_candidate", {
-                    userId: userId.toString(),
-                    candidate
-                });
-            } catch (error) {
-                console.error("Ice candidate Error: ", error.message);
-
-                socket.emit("socket_error", {
-                    event: "ice_candidate",
-                    message: "Failed to send ICE candidate"
-                })
+            return {
+                interview,
+                role,
+                userId,
+                interviewId: canonicalInterviewId,
+                roomName: `interview:${canonicalInterviewId}`,
             };
-        });
+        };
 
-           //INITIATES CALL
+        const requireInterviewRoom = async (interviewId) => {
+            const context = await getInterviewContext(interviewId);
 
-        socket.on("interview_calling", async (data) => {
+            if (!socket.rooms.has(context.roomName)) {
+                throw new Error(
+                    "You have not joined this interview"
+                );
+            }
+
+            return context;
+        };
+
+        const requireCandidate = (role) => {
+            if (role !== "candidate") {
+                throw new Error(
+                    "Only the candidate can trigger this event"
+                );
+            }
+        };
+
+        // ---------------------------------------------------------
+        // JOIN INTERVIEW
+        // ---------------------------------------------------------
+
+        socket.on("join_interview", async (data = {}) => {
+            const requestedInterviewId =
+                typeof data === "string"
+                    ? data
+                    : data?.interviewId;
+
+            console.log("[JOIN] Request received:", {
+                socketId: socket.id,
+                userId,
+                interviewId: requestedInterviewId,
+                connected: socket.connected,
+            });
+
             try {
-                const { interviewRoomId } = data || {};
+                requireValidId(
+                    requestedInterviewId,
+                    "interview ID"
+                );
 
-                if (!interviewRoomId) {
-                    socket.emit("socket_error", {
-                        event: "interview_calling",
-                        message: "InterviewRoomID is required"
-                    })
+                // Verify this user is the candidate or recruiter.
+                const context = await getInterviewContext(
+                    requestedInterviewId
+                );
+
+                const { roomName, interviewId, role } = context;
+
+                // Join the canonical room before acknowledging success.
+                await socket.join(roomName);
+
+                if (!socket.rooms.has(roomName)) {
+                    throw new Error(
+                        "Failed to join the interview room"
+                    );
+                }
+
+                // Only the other participant should count as a peer.
+                const roomSockets = await io
+                    .in(roomName)
+                    .fetchSockets();
+
+                const peerPresent = roomSockets.some((peer) => {
+                    if (peer.id === socket.id) return false;
+
+                    const peerUserId = getReferenceId(
+                        peer.userId ?? peer.user?._id
+                    );
+
+                    return peerUserId !== userId;
+                });
+
+                const payload = {
+                    success: true,
+                    interviewId,
+                    role,
+                    peerPresent,
                 };
 
-                const userId = socket.user._id;
-
-                const interview = await authorizeInterviewRoom({
-                    interviewRoomId,
-                    userId
+                console.log("[JOIN] Sending confirmation:", {
+                    socketId: socket.id,
+                    userId,
+                    interviewId,
+                    roomName,
+                    role,
+                    peerPresent,
+                    roomJoined: socket.rooms.has(roomName),
                 });
 
-                const interviewRoom = `interview:${interview.interviewRoomId.toString()}`;
+                socket.emit("interview_joined", payload);
 
-                if (!socket.rooms.has(interviewRoom)) {
-                    socket.emit("socket_error", {
-                        event: "interview_calling",
-                        message: "You have not joined this interview"
-                    })
-                }
-
-                const role = interview.candidate.toString() === userId.toString() ? "candidate" : "recruiter";
-
-                socket.to(interviewRoom).emit("interview_incoming_call", {
-                    interviewRoomId: interview.interviewRoomId,
-                    interviewId: interview._id,
-                    callerId: userId.toString(),
-                    callerRole: role
-                })
-            } catch (error) {
-                console.error("interview calling error:", error.message);
-
-                socket.emit("interview_calling", {
-                    event: "interview_calling",
-                    message: "Failed to start interview calling"
-                })
-            }
-        })
-
-        
-        // ACCEPT CALL
-
-        socket.on("interview_accepted", async (data) => {
-            try {
-                const { interviewRoomId } = data || {};
-
-                if (!interviewRoomId) {
-                    socket.emit("socket_error", {
-                        event: "interview_accepted",
-                        message: "interview Room ID is required"
-                    })
-                }
-
-                const userId = socket.user._id;
-
-                const interview = await authorizeInterviewRoom({
-                    interviewRoomId,
-                    userId
-                })
-
-                const interviewRoom = `interview:${interview.interviewRoomId.toString()}`;
-
-                if (!socket.rooms.has(interviewRoom)) {
-                    socket.emit("socket_error", {
-                        event: "interview_accepted",
-                        message: "You have not joined this room"
-                    })
-                }
-
-                const role = interview.candidate.toString() === userId.toString() ? "candidate" : "recruiter";
-
-                socket.to(interviewRoom).emit("interview_call_accepted", {
-                    interviewRoomId: interview.interviewRoomId,
-                    interviewId: interview._id,
-                    acceptedBy: userId.toString(),
-                    acceptedByRole: role
+                // Notify other sockets in this interview room.
+                socket.to(roomName).emit("interview_user_joined", {
+                    interviewId,
+                    userId,
+                    role,
                 });
             } catch (error) {
-                console.error("interview accept error:", error);
-
-                socket.emit("socket_error", {
-                    event: "interview_accepted",
-                    message: "Failed to accept interview call"
-                })
-            }
-        })
-
-                // DECLIEND CALL
-
-        socket.on("interview_rejected", async (data) => {
-            try {
-                const { interviewRoomId } = data || {};
-
-                if (!interviewRoomId) {
-                    socket.emit("socket_error", {
-                        event: "interview_rejected",
-                        message: "Interview Room Id Is required"
-                    })
-                }
-
-                const userId = socket.user._id;
-
-                const interview = await authorizeInterviewRoom({
-                    interviewRoomId,
-                    userId
-                })
-
-                const interviewRoom = `interview:${interviewRoomId.interviewRoomId.toString()}`;
-
-                if (!socket.rooms.has(interviewRoom)) {
-                    socket.emit("socket_error", {
-                        event: "interview_rejected",
-                        message: "You have not joined this room"
-                    })
-                }
-
-                socket.to(interviewRoom).emit("interview_call_rejected", {
-                    interviewRoomId: interview.interviewRoomId,
-                    interviewId: interview._id,
-                    rejectedBy: userId.toString(),
-                    reason: reason || "Call Rejected"
-                })
-            } catch (error) {
-                console.error("interview_rejected error: ", error.message);
-
-                socket.emit("socket_error", {
-                    event: "interview_rejected",
-                    message: "Failed to reject interview call"
-                })
-            }
-        })
-
-               // CAMERA TOGGLED 
-
-        socket.on("camera_toggled", async (data) => {
-            try {
-                const { interviewRoomId, enabled } = data || {};
-
-                if (!interviewRoomId || typeof enabled !== "boolean") {
-                    socket.emit("socket_error", {
-                        event: "camera_toggled",
-                        message: "interviewRoomId or camera status are required"
-                    })
-                }
-
-                const userId = socket.user._id;
-
-                const interview = await authorizeInterviewRoom({
-                    interviewRoomId,
-                    userId
-                })
-
-                const interviewRoom = `interview:${interview.interviewRoomId.toString()}`;
-
-                if (!socket.rooms.has(interviewRoom)) {
-                    socket.emit("socket_error", {
-                        event: "camera_taggled",
-                        message: "You have not joined this room"
-                    })
-                }
-
-                socket.to(interviewRoom).emit("remote_camera_toggled", {
-                    userId: userId.toString(),
-                    enabled
+                console.error("[JOIN] Failed:", {
+                    socketId: socket.id,
+                    userId,
+                    interviewId: requestedInterviewId,
+                    message: error.message,
                 });
 
-            } catch (error) {
-                console.error("Camera toggled Error: ", error.message);
-
-                socket.emit("socket_error", {
-                    event: "camera_toggled",
-                    message: "Failed to toggled camera"
-                })
-            }
-        })
-
-                // MICROPHONE TOGGLED 
-
-        socket.on("microphone_toggled", async (data) => {
-            try {
-                const { interviewRoomId, enabled } = data || {};
-
-                if (!interviewRoomId || !typeof enabled === "boolean") {
-                    socket.emit("socket_error", {
-                        event: "microphone_toggled",
-                        message: "InterviewRoomID or microphone status is required"
-                    })
-                }
-
-                const userId = socket.user._id;
-
-                const interview = await authorizeInterviewRoom({
-                    interviewRoomId,
-                    userId
-                })
-
-                const interviewRoom = `interview:${interview.interviewRoomId.toString()}`;
-
-                if (!socket.rooms.has(interviewRoom)) {
-                    socket.emit("socket_error", {
-                        event: "socket_error",
-                        message: "You have not joined this room"
-                    });
+                const errorPayload = {
+                    event: "join_interview",
+                    interviewId: requestedInterviewId || null,
+                    message:
+                        error.message ||
+                        "Unable to join the interview",
                 };
 
-                socket.to(interviewRoom).emit("remote_microphone_toggled", {
-                    userId: userId.toString(),
-                    enabled,
-                })
+                socket.emit("socket_error", errorPayload);
 
-            } catch (error) {
-                console.error("Microphone toggle Error: ", error.message);
-
-                socket.emit("socket_error", {
-                    event: "microphone_toggled",
-                    message: "Failed To toggle microphone"
-                })
-            }
-        })
-
-                // SCREEN SHARE ON
-
-        socket.on("screen_share_started", async (data) => {
-            try {
-                const { interviewRoomId } = data || {};
-
-                if (!interviewRoomId) {
-                    socket.emit("socket_error", {
-                        event: "screen_share_started",
-                        message: "interviewRoomID Required"
-                    })
-                }
-
-                const userId = socket.user._id;
-
-                const interview = await authorizeInterviewRoom({
-                    interviewRoomId,
-                    userId
-                })
-
-                const interviewRoom = `interview:${interview.interviewRoomId.toString()}`;
-
-                if (!socket.rooms.has(interviewRoom)) {
-                    socket.emit("socket_error", {
-                        event: "screen_share_started",
-                        message: "You have not joined this room"
-                    })
-                }
-
-                socket.to(interviewRoom).emit("remote_screen_share_started", {
-                    userId: userId.toString()
-                })
-
-            } catch (error) {
-                console.error("screen share error: ", error.message);
-
-                socket.emit("socket_error", {
-                    event: "screen_share_started",
-                    message: "Failed to start screen share"
-                })
-            }
-        })
-
-              // SCREEN SHARE OFF 
-
-        socket.on("screen_share_stopped", async (data) => {
-            try {
-                const { interviewRoomId } = data || {};
-
-                if (!interviewRoomId) {
-                    socket.emti("socket_error", {
-                        event: "screen_share_stopped",
-                        message: "interviewRoomID is required"
-                    })
-                }
-
-                const userId = socker.user._id;
-
-                const interview = await authorizeInterviewRoom({
-                    interviewRoomId,
-                    userId
-                })
-
-                const interviewRoom = `interview:${interview.interviewRoomId.toString()}`;
-
-                if (!socket.rooms.has(interviewRoom)) {
-                    socket.emit("socket_error", {
-                        event: "screen_share_stopped",
-                        message: "You have not joined this room"
-                    })
-                }
-
-                socket.to(interviewRoom).emit("remote_screen_share_stopped", {
-                    userId: userId.toString()
-                });
-
-            } catch (error) {
-                console.error("screen share stop error: ", error.message);
-
-                socket.emit("socket_error", {
-                    event: "screen_share_stopped",
-                    message: "Failed to stop screen sharing"
-                })
-            }
-        })
-
-        
-        // CANDIDATE TAB CHANGE
-
-        socket.on("candidate_tab_changed", async (data) => {
-            try {
-                const { interviewRoomId } = data || {};
-
-                if (!interviewRoomId) {
-                    socket.emit("socket_error", {
-                        event: "candidate_tab_changed",
-                        message: "InterviewRoomId is required"
-                    })
-                }
-
-                const userId = socket.user._id;
-
-                const interview = await authorizeInterviewRoom({
-                    interviewRoomId,
-                    userId
-                })
-
-                if (interview.candidate.toString() !== userId.toString()) {
-                    socket.emit("socket_error", {
-                        event: "candidate_tab_changed",
-                        message: "Only candidate can trigger this event"
-                    })
-                }
-
-                const interviewRoom = `interview${interview.interviewRoomId.toString()}`;
-
-                if (!socket.rooms.has(interviewRoom)) {
-                    return socket.emit("socket_error", {
-                        event: "candidate_tab_changed",
-                        message:
-                            "You have not joined this interview"
-                    });
-                }
-
-
-                socket.to(interviewRoom).emit("candidate_tab_changed", {
-                    candidateId: userId.toString(),
-                    changedAt: new Date()
-                })
-            } catch (error) {
-                socket.emit("socket_error", {
-                    event: "candidate_tab_changed",
-                    message: "failed to change tabs"
-                })
-            }
-        })
-
-                // CANDIDATE TAB RETURED
-
-        socket.on("candidate_tab_returned", async (data) => {
-            try {
-                const { interviewRoomId } = data || {};
-
-                if (!interviewRoomId) {
-                    return socket.emit("socket_error", {
-                        event: "candidate_tab_returned",
-                        message: "Interview Room ID is required"
-                    });
-                }
-
-                const userId = socket.user._id;
-
-                const interview =
-                    await authorizeInterviewRoom({
-                        interviewRoomId,
-                        userId
-                    });
-
-                if (interview.candidate.toString() !== userId.toString()) {
-                    return socket.emit("socket_error", {
-                        event: "candidate_tab_returned",
-                        message: "Only candidate can trigger this event"
-                    });
-                }
-
-                const interviewRoom = `interview:${interview.interviewRoomId.toString()}`;
-
-                if (!socket.rooms.has(interviewRoom)) {
-                    return socket.emit("socket_error", {
-                        event: "candidate_tab_returned",
-                        message: "You have not joined this interview"
-                    });
-                }
-
-                socket.to(interviewRoom).emit("candidate_tab_returned", {
-                    candidateId: userId.toString(),
-                    returnedAt: new Date()
-                });
-
-            } catch (error) {
-                console.error("Candidate tab returned error:", error.message);
-
-                socket.emit("socket_error", {
-                    event: "candidate_tab_returned",
-                    message: error.message || "Failed to detect candidate return"
+                socket.emit("interview_error", {
+                    success: false,
+                    ...errorPayload,
                 });
             }
         });
 
-             // LEAVE INTERVIEW
+        // ---------------------------------------------------------
+        // WEBRTC SIGNALING
+        // ---------------------------------------------------------
 
-        socket.on("leave_interview", async (data) => {
+        socket.on("offer", async (data = {}) => {
             try {
-                const { interviewRoomId } = data || {};
+                const { interviewId, offer } = data;
 
-                if (!interviewRoomId) {
-                    return socket.emit("socket_error", {
-                        event: "leave_interview",
-                        message: "Interview Room ID is required"
-                    });
+                requireValue(offer, "Offer");
+
+                const context =
+                    await requireInterviewRoom(interviewId);
+
+                if (context.role !== "recruiter") {
+                    throw new Error(
+                        "Only the recruiter can send the initial offer"
+                    );
                 }
 
-                const userId = socket.user._id;
-
-                const interview = await authorizeInterviewRoom({
-                    interviewRoomId,
-                    userId
+                socket.to(context.roomName).emit("offer", {
+                    interviewId: context.interviewId,
+                    userId,
+                    offer,
                 });
+            } catch (error) {
+                emitSocketError("offer", error);
+            }
+        });
 
+        socket.on("answer", async (data = {}) => {
+            try {
+                const { interviewId, answer } = data;
 
-                const interviewRoom = `interview:${interview.interviewRoomId.toString()}`;
+                requireValue(answer, "Answer");
 
-                if (!socket.rooms.has(interviewRoom)) {
-                    return socket.emit("socket_error", {
-                        event: "leave_interview",
-                        message: "You have not joined this interview"
-                    });
+                const context =
+                    await requireInterviewRoom(interviewId);
+
+                if (context.role !== "candidate") {
+                    throw new Error(
+                        "Only the candidate can send the initial answer"
+                    );
                 }
 
-                const role = interview.candidate.toString() === userId.toString() ? "candidate" : "recruiter";
+                socket.to(context.roomName).emit("answer", {
+                    interviewId: context.interviewId,
+                    userId,
+                    answer,
+                });
+            } catch (error) {
+                emitSocketError("answer", error);
+            }
+        });
 
-                socket.leave(interviewRoom);
+        socket.on("ice_candidate", async (data = {}) => {
+            try {
+                const { interviewId, candidate } = data;
 
-                socket.to(interviewRoom).emit("interview_user_left", {
-                    userId: userId.toString(),
-                    role
-                })
+                requireValue(candidate, "ICE candidate");
+
+                const context =
+                    await requireInterviewRoom(interviewId);
+
+                socket.to(context.roomName).emit("ice_candidate", {
+                    interviewId: context.interviewId,
+                    userId,
+                    candidate,
+                });
+            } catch (error) {
+                emitSocketError("ice_candidate", error);
+            }
+        });
+
+        // ---------------------------------------------------------
+        // INTERVIEW CALL EVENTS
+        // ---------------------------------------------------------
+
+        socket.on("interview_calling", async (data = {}) => {
+            try {
+                const context =
+                    await requireInterviewRoom(data.interviewId);
+
+                socket.to(context.roomName).emit(
+                    "interview_incoming_call",
+                    {
+                        interviewId: context.interviewId,
+                        callerId: userId,
+                        callerRole: context.role,
+                    }
+                );
+            } catch (error) {
+                emitSocketError("interview_calling", error);
+            }
+        });
+
+        socket.on("interview_accepted", async (data = {}) => {
+            try {
+                const context =
+                    await requireInterviewRoom(data.interviewId);
+
+                socket.to(context.roomName).emit(
+                    "interview_call_accepted",
+                    {
+                        interviewId: context.interviewId,
+                        acceptedBy: userId,
+                        acceptedByRole: context.role,
+                    }
+                );
+            } catch (error) {
+                emitSocketError("interview_accepted", error);
+            }
+        });
+
+        socket.on("interview_rejected", async (data = {}) => {
+            try {
+                const { interviewId, reason } = data;
+
+                const context =
+                    await requireInterviewRoom(interviewId);
+
+                socket.to(context.roomName).emit(
+                    "interview_call_rejected",
+                    {
+                        interviewId: context.interviewId,
+                        rejectedBy: userId,
+                        rejectedByRole: context.role,
+                        reason: reason || "Call rejected",
+                    }
+                );
+            } catch (error) {
+                emitSocketError("interview_rejected", error);
+            }
+        });
+
+        socket.on("call_ended", async (data = {}) => {
+            try {
+                const { interviewId, reason } = data;
+
+                const context =
+                    await requireInterviewRoom(interviewId);
+
+                const payload = {
+                    interviewId: context.interviewId,
+                    endedBy: userId,
+                    endedByRole: context.role,
+                    reason: reason || "Call ended",
+                    endedAt: new Date(),
+                };
+
+                socket.to(context.roomName).emit("call_ended", payload);
+                socket.emit("call_ended", payload);
+            } catch (error) {
+                emitSocketError("call_ended", error);
+            }
+        });
+
+        // ---------------------------------------------------------
+        // CAMERA, MICROPHONE AND SCREEN SHARING
+        // ---------------------------------------------------------
+
+        socket.on("camera_toggled", async (data = {}) => {
+            try {
+                const { interviewId, enabled } = data;
+
+                requireBoolean(enabled, "Camera status");
+
+                const context =
+                    await requireInterviewRoom(interviewId);
+
+                socket.to(context.roomName).emit(
+                    "remote_camera_toggled",
+                    {
+                        interviewId: context.interviewId,
+                        userId,
+                        enabled,
+                    }
+                );
+            } catch (error) {
+                emitSocketError("camera_toggled", error);
+            }
+        });
+
+        socket.on("microphone_toggled", async (data = {}) => {
+            try {
+                const { interviewId, enabled } = data;
+
+                requireBoolean(enabled, "Microphone status");
+
+                const context =
+                    await requireInterviewRoom(interviewId);
+
+                socket.to(context.roomName).emit(
+                    "remote_microphone_toggled",
+                    {
+                        interviewId: context.interviewId,
+                        userId,
+                        enabled,
+                    }
+                );
+            } catch (error) {
+                emitSocketError("microphone_toggled", error);
+            }
+        });
+
+        socket.on("screen_share_started", async (data = {}) => {
+            try {
+                const context =
+                    await requireInterviewRoom(data.interviewId);
+
+                socket.to(context.roomName).emit(
+                    "remote_screen_share_started",
+                    {
+                        interviewId: context.interviewId,
+                        userId,
+                    }
+                );
+            } catch (error) {
+                emitSocketError("screen_share_started", error);
+            }
+        });
+
+        socket.on("screen_share_stopped", async (data = {}) => {
+            try {
+                const context =
+                    await requireInterviewRoom(data.interviewId);
+
+                socket.to(context.roomName).emit(
+                    "remote_screen_share_stopped",
+                    {
+                        interviewId: context.interviewId,
+                        userId,
+                    }
+                );
+            } catch (error) {
+                emitSocketError("screen_share_stopped", error);
+            }
+        });
+
+        // ---------------------------------------------------------
+        // CANDIDATE TAB MONITORING
+        // ---------------------------------------------------------
+
+        socket.on("candidate_tab_changed", async (data = {}) => {
+            try {
+                const context =
+                    await requireInterviewRoom(data.interviewId);
+
+                requireCandidate(context.role);
+
+                socket.to(context.roomName).emit(
+                    "candidate_tab_changed",
+                    {
+                        interviewId: context.interviewId,
+                        candidateId: userId,
+                        changedAt: new Date(),
+                    }
+                );
+            } catch (error) {
+                emitSocketError("candidate_tab_changed", error);
+            }
+        });
+
+        socket.on("candidate_tab_returned", async (data = {}) => {
+            try {
+                const context =
+                    await requireInterviewRoom(data.interviewId);
+
+                requireCandidate(context.role);
+
+                socket.to(context.roomName).emit(
+                    "candidate_tab_returned",
+                    {
+                        interviewId: context.interviewId,
+                        candidateId: userId,
+                        returnedAt: new Date(),
+                    }
+                );
+            } catch (error) {
+                emitSocketError("candidate_tab_returned", error);
+            }
+        });
+
+        // ---------------------------------------------------------
+        // LEAVE INTERVIEW
+        // ---------------------------------------------------------
+
+        socket.on("leave_interview", async (data = {}) => {
+            try {
+                const context =
+                    await requireInterviewRoom(data.interviewId);
+
+                await socket.leave(context.roomName);
+
+                // Notify remaining room members.
+                socket.to(context.roomName).emit(
+                    "interview_user_left",
+                    {
+                        interviewId: context.interviewId,
+                        userId,
+                        role: context.role,
+                    }
+                );
 
                 socket.emit("interview_left", {
                     success: true,
-                    interviewRoomId: interview.interviewRoomId
+                    interviewId: context.interviewId,
                 });
             } catch (error) {
-                console.error("Leave interview Error:", error.message);
-
-                socket.emit("socket_error", {
-                    event: "leave_interview",
-                    message: "Failed to leave interview",
-                })
+                emitSocketError("leave_interview", error);
             }
-        })
+        });
 
-        
-        // END CALL
-        socket.on("call_ended", async (data) => {
+        // ---------------------------------------------------------
+        // CHAT: JOIN CONVERSATION
+        // ---------------------------------------------------------
+
+        socket.on("join_conversation", async (data = {}) => {
             try {
-                const { interviewRoomId, reason } = data || {};
+                const conversationId =
+                    typeof data === "string"
+                        ? data
+                        : data?.conversationId;
 
+                const conversation =
+                    await getActiveConversation(conversationId);
 
-                if (!interviewRoomId) {
-                    return socket.emit("socket_error", {
-                        event: "call_ended",
-                        message: "Interview Room ID is required"
-                    });
-                }
+                const roomName = conversation._id.toString();
 
-                const userId = socket.user._id;
+                await socket.join(roomName);
 
-                const interview = await authorizeInterviewRoom({
-                    interviewRoomId,
-                    userId
+                socket.emit("conversation_joined", {
+                    success: true,
+                    conversationId: roomName,
                 });
 
-                const interviewRoom = `interview:${interview.interviewRoomId.toString()}`;
-
-                if (!socket.rooms.has(interviewRoom)) {
-                    return socket.emit("socket_error", {
-                        event: "call_ended",
-                        message: "You have not joined this interview"
-                    });
-                }
-
-                socket.to(interviewRoom).emit("call_ended", {
-                    endedBy: userId.toString(),
-                    reason: reason || "call ended",
-                    endedAt: new Date(),
-                })
-
-                socket.emit("call_ended", {
-                    endedBy: userId.toString(),
-                    reason: reason || "call ended",
-                    endedAt: new Date(),
-                })
+                console.log("[Chat] User joined conversation:", {
+                    userId,
+                    conversationId: roomName,
+                });
             } catch (error) {
-                console.error("call ended error: ", error.messaga);
-
-                socket.emit("socket_error", {
-                    event: "call_ended",
-                    message: "Failed to end call"
-                })
+                emitSocketError("join_conversation", error);
             }
-        })
-        // JOIN CONVERSATION
-
-        socket.on(
-            "join_conversation",
-            async (conversationId) => {
-                try {
-                    // ==================================
-                    // VALIDATE CONVERSATION ID
-                    // ==================================
-
-                    if (!conversationId) {
-                        return socket.emit(
-                            "socket_error",
-                            {
-                                event: "join_conversation",
-                                message:
-                                    "Conversation ID is required",
-                            }
-                        );
-                    }
-
-                    if (
-                        !mongoose.Types.ObjectId.isValid(
-                            conversationId
-                        )
-                    ) {
-                        return socket.emit(
-                            "socket_error",
-                            {
-                                event: "join_conversation",
-                                message:
-                                    "Invalid conversation ID",
-                            }
-                        );
-                    }
-
-                    // ==================================
-                    // FIND CONVERSATION
-                    // ==================================
-
-                    const conversation =
-                        await Conversation.findById(
-                            conversationId
-                        );
-
-                    if (!conversation) {
-                        return socket.emit(
-                            "socket_error",
-                            {
-                                event: "join_conversation",
-                                message:
-                                    "Conversation not found",
-                            }
-                        );
-                    }
-
-                    // ==================================
-                    // CHECK DELETED
-                    // ==================================
-
-                    if (conversation.isDeleted) {
-                        return socket.emit(
-                            "socket_error",
-                            {
-                                event: "join_conversation",
-                                message:
-                                    "Conversation is deleted",
-                            }
-                        );
-                    }
-
-                    // ==================================
-                    // CHECK PARTICIPANT
-                    // ==================================
-
-                    const isParticipant =
-                        conversation.participants.some(
-                            (participantId) =>
-                                participantId.toString() ===
-                                userId
-                        );
-
-                    if (!isParticipant) {
-                        return socket.emit(
-                            "socket_error",
-                            {
-                                event: "join_conversation",
-                                message:
-                                    "You are not a participant of this conversation",
-                            }
-                        );
-                    }
-
-                    // ==================================
-                    // JOIN CONVERSATION ROOM
-                    // ==================================
-
-                    const conversationRoom =
-                        conversationId.toString();
-
-                    socket.join(conversationRoom);
-
-                    console.log(
-                        `User ${userId} joined conversation ${conversationRoom}`
-                    );
-
-                    // ==================================
-                    // CONFIRM JOIN
-                    // ==================================
-
-                    socket.emit(
-                        "conversation_joined",
-                        {
-                            success: true,
-                            conversationId:
-                                conversationRoom,
-                        }
-                    );
-                } catch (error) {
-                    console.error(
-                        "Join conversation error:",
-                        error.message
-                    );
-
-                    socket.emit("socket_error", {
-                        event: "join_conversation",
-                        message:
-                            "Unable to join conversation",
-                    });
-                }
-            }
-        );
-
-        // SEND MESSAGE
-
-        socket.on(
-            "send_message",
-            async (data) => {
-                try {
-                    const {
-                        conversationId,
-                        content,
-                        messageType = "text",
-                    } = data || {};
-
-                    // ==================================
-                    // VALIDATE DATA
-                    // ==================================
-
-                    if (
-                        !conversationId ||
-                        !content?.trim()
-                    ) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "conversationId and content are required",
-                            }
-                        );
-                    }
-
-                    if (
-                        !mongoose.Types.ObjectId.isValid(
-                            conversationId
-                        )
-                    ) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "Invalid conversation ID",
-                            }
-                        );
-                    }
-
-                    // ==================================
-                    // FIND CONVERSATION
-                    // ==================================
-
-                    const conversation =
-                        await Conversation.findById(
-                            conversationId
-                        );
-
-                    if (!conversation) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "Conversation not found",
-                            }
-                        );
-                    }
-
-                    // ==================================
-                    // CHECK DELETED
-                    // ==================================
-
-                    if (conversation.isDeleted) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "Conversation is deleted",
-                            }
-                        );
-                    }
-
-                    // ==================================
-                    // CHECK PARTICIPANT
-                    // ==================================
-
-                    const isParticipant =
-                        conversation.participants.some(
-                            (participantId) =>
-                                participantId.toString() ===
-                                userId
-                        );
-
-                    if (!isParticipant) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "You are not a participant of this conversation",
-                            }
-                        );
-                    }
-
-                    // ==================================
-                    // CHECK CONVERSATION ROOM
-                    // ==================================
-
-                    const conversationRoom =
-                        conversationId.toString();
-
-                    if (
-                        !socket.rooms.has(
-                            conversationRoom
-                        )
-                    ) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "You have not joined this conversation",
-                            }
-                        );
-                    }
-
-                    // ==================================
-                    // CREATE MESSAGE
-                    // ==================================
-
-                    const message =
-                        await Message.create({
-                            conversation:
-                                conversationId,
-
-                            sender:
-                                socket.user._id,
-
-                            content:
-                                content.trim(),
-
-                            messageType,
-                        });
-
-                    // ==================================
-                    // UPDATE CONVERSATION
-                    // ==================================
-
-                    conversation.lastMessage =
-                        message._id;
-
-                    conversation.lastMessageAt =
-                        new Date();
-
-                    await conversation.save();
-
-                    // ==================================
-                    // POPULATE SENDER
-                    // IMPORTANT FOR AVATAR
-                    // ==================================
-
-                    const populatedMessage =
-                        await Message.findById(
-                            message._id
-                        ).populate(
-                            "sender",
-                            "name username email avatar avatarUrl profileImage profilePicture photo"
-                        );
-
-                    // ==================================
-                    // SEND MESSAGE TO ROOM
-                    // ==================================
-
-                    io.to(conversationRoom).emit(
-                        "new_message",
-                        {
-                            success: true,
-                            message:
-                                populatedMessage,
-                        }
-                    );
-
-                    console.log(
-                        `Message ${message._id} sent by ${userId}`
-                    );
-                } catch (error) {
-                    console.error(
-                        "Send message error:",
-                        error.message
-                    );
-
-                    socket.emit(
-                        "message_error",
-                        {
-                            success: false,
-                            message:
-                                "Failed to send message",
-                        }
-                    );
-                }
-            }
-        );
-
-        // SEND FILE MESSAGE
-
-        socket.on(
-            "send_file_message",
-            async (data) => {
-                try {
-                    const {
-                        conversationId,
-                        attachment,
-                    } = data || {};
-
-                    // ==========================================
-                    // VALIDATE CONVERSATION
-                    // ==========================================
-
-                    if (!conversationId) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "Conversation ID is required",
-                            }
-                        );
-                    }
-
-                    if (
-                        !mongoose.Types.ObjectId.isValid(
-                            conversationId
-                        )
-                    ) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "Invalid conversation ID",
-                            }
-                        );
-                    }
-
-                    // ==========================================
-                    // VALIDATE ATTACHMENT
-                    // ==========================================
-
-                    if (!attachment?.url) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "File attachment is required",
-                            }
-                        );
-                    }
-
-                    // ==========================================
-                    // FIND CONVERSATION
-                    // ==========================================
-
-                    const conversation =
-                        await Conversation.findById(
-                            conversationId
-                        );
-
-                    if (!conversation) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "Conversation not found",
-                            }
-                        );
-                    }
-
-                    // ==========================================
-                    // CHECK DELETED
-                    // ==========================================
-
-                    if (conversation.isDeleted) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "Conversation is deleted",
-                            }
-                        );
-                    }
-
-                    // ==========================================
-                    // CHECK PARTICIPANT
-                    // ==========================================
-
-                    const isParticipant =
-                        conversation.participants.some(
-                            (participantId) =>
-                                participantId.toString() ===
-                                socket.user._id.toString()
-                        );
-
-                    if (!isParticipant) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "You are not a participant of this conversation",
-                            }
-                        );
-                    }
-
-                    // ==========================================
-                    // DETERMINE MESSAGE TYPE
-                    // ==========================================
-
-                    let messageType = "file";
-
-                    const mimeType =
-                        attachment.mimeType || "";
-
-                    if (
-                        mimeType.startsWith("image/")
-                    ) {
-                        messageType = "image";
-                    } else if (
-                        mimeType.startsWith("video/")
-                    ) {
-                        messageType = "video";
-                    } else if (
-                        mimeType.startsWith("audio/")
-                    ) {
-                        messageType = "audio";
-                    } else if (
-                        mimeType ===
-                        "application/pdf" ||
-                        mimeType.includes("word") ||
-                        mimeType.includes("document")
-                    ) {
-                        messageType = "document";
-                    }
-
-                    // ==========================================
-                    // CREATE MESSAGE
-                    // ==========================================
-
-                    const message =
-                        await Message.create({
-                            conversation:
-                                conversationId,
-
-                            sender:
-                                socket.user._id,
-
-                            content: "",
-
-                            messageType,
-
-                            attachments: [
-                                {
-                                    url:
-                                        attachment.url,
-
-                                    publicId:
-                                        attachment.publicId ||
-                                        null,
-
-                                    fileName:
-                                        attachment.fileName ||
-                                        null,
-
-                                    originalName:
-                                        attachment.originalName ||
-                                        null,
-
-                                    mimeType:
-                                        attachment.mimeType ||
-                                        null,
-
-                                    extension:
-                                        attachment.extension ||
-                                        null,
-
-                                    size:
-                                        attachment.size ||
-                                        0,
-                                },
-                            ],
-                        });
-
-                    // ==========================================
-                    // UPDATE LAST MESSAGE
-                    // ==========================================
-
-                    conversation.lastMessage =
-                        message._id;
-
-                    conversation.lastMessageAt =
-                        new Date();
-
-                    await conversation.save();
-
-                    // ==========================================
-                    // POPULATE SENDER
-                    // ==========================================
-
-                    const populatedMessage =
-                        await Message.findById(
-                            message._id
-                        ).populate(
-                            "sender",
-                            "name username email avatar avatarUrl profileImage profilePicture photo"
-                        );
-
-                    // ==========================================
-                    // EMIT TO CONVERSATION
-                    // ==========================================
-
-                    io.to(
-                        conversationId.toString()
-                    ).emit(
-                        "new_message",
-                        {
-                            success: true,
-                            message:
-                                populatedMessage,
-                        }
-                    );
-
-                    console.log(
-                        `File message sent: ${message._id}`
-                    );
-                } catch (error) {
-                    console.error(
-                        "SEND FILE MESSAGE ERROR:",
-                        error
-                    );
-
-                    socket.emit(
-                        "message_error",
-                        {
-                            success: false,
-                            message:
-                                "Failed to send file message",
-                        }
-                    );
-                }
-            }
-        );
-
-        // MESSAGE DELIVERED
-
-        socket.on(
-            "message_delivered",
-            async (data) => {
-                try {
-                    const { messageId } =
-                        data || {};
-
-                    if (!messageId) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "messageId is required",
-                            }
-                        );
-                    }
-
-                    if (
-                        !mongoose.Types.ObjectId.isValid(
-                            messageId
-                        )
-                    ) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "Invalid message ID",
-                            }
-                        );
-                    }
-
-                    const currentUserId =
-                        socket.user._id;
-
-                    // ==================================
-                    // FIND MESSAGE
-                    // ==================================
-
-                    const message =
-                        await Message.findById(
-                            messageId
-                        );
-
-                    if (!message) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "Message not found",
-                            }
-                        );
-                    }
-
-                    // ==================================
-                    // FIND CONVERSATION
-                    // ==================================
-
-                    const conversation =
-                        await Conversation.findById(
-                            message.conversation
-                        );
-
-                    if (!conversation) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "Conversation not found",
-                            }
-                        );
-                    }
-
-                    // ==================================
-                    // CHECK PARTICIPANT
-                    // ==================================
-
-                    const isParticipant =
-                        conversation.participants.some(
-                            (participantId) =>
-                                participantId.toString() ===
-                                currentUserId.toString()
-                        );
-
-                    if (!isParticipant) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "You are not a participant of this conversation",
-                            }
-                        );
-                    }
-
-                    // ==================================
-                    // DON'T ACK OWN MESSAGE
-                    // ==================================
-
-                    if (
-                        message.sender.toString() ===
-                        currentUserId.toString()
-                    ) {
-                        return;
-                    }
-
-                    // ==================================
-                    // CHECK ALREADY DELIVERED
-                    // ==================================
-
-                    const alreadyDelivered =
-                        message.deliveredTo?.some(
-                            (item) =>
-                                item.user
-                                    ?.toString() ===
-                                currentUserId.toString()
-                        );
-
-                    // ==================================
-                    // SAVE DELIVERY STATUS
-                    // ==================================
-
-                    if (!alreadyDelivered) {
-                        if (!message.deliveredTo) {
-                            message.deliveredTo = [];
-                        }
-
-                        const deliveredAt =
-                            new Date();
-
-                        message.deliveredTo.push({
-                            user: currentUserId,
-                            deliveredAt,
-                        });
-
-                        await message.save();
-
-                        // ==================================
-                        // NOTIFY SENDER
-                        // ==================================
-
-                        const senderRoom =
-                            message.sender.toString();
-
-                        io.to(senderRoom).emit(
-                            "message_delivered",
-                            {
-                                messageId:
-                                    message._id.toString(),
-
-                                userId:
-                                    currentUserId.toString(),
-
-                                deliveredAt,
-                            }
-                        );
-
-                        console.log(
-                            `Message ${messageId} delivered to user ${currentUserId}`
-                        );
-                    }
-                } catch (error) {
-                    console.error(
-                        "message_delivered error:",
-                        error.message
-                    );
-
-                    socket.emit(
-                        "message_error",
-                        {
-                            success: false,
-                            message:
-                                "Failed to update delivery status",
-                        }
-                    );
-                }
-            }
-        );
-
-        // MESSAGE READ / SEEN
-
-        socket.on(
-            "message_read",
-            async (data) => {
-                try {
-                    const { messageId } =
-                        data || {};
-
-                    if (!messageId) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "messageId is required",
-                            }
-                        );
-                    }
-
-                    if (
-                        !mongoose.Types.ObjectId.isValid(
-                            messageId
-                        )
-                    ) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "Invalid message ID",
-                            }
-                        );
-                    }
-
-                    const currentUserId =
-                        socket.user._id;
-
-                    // ==================================
-                    // FIND MESSAGE
-                    // ==================================
-
-                    const message =
-                        await Message.findById(
-                            messageId
-                        );
-
-                    if (!message) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "Message not found",
-                            }
-                        );
-                    }
-
-                    // ==================================
-                    // FIND CONVERSATION
-                    // ==================================
-
-                    const conversation =
-                        await Conversation.findById(
-                            message.conversation
-                        );
-
-                    if (!conversation) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "Conversation not found",
-                            }
-                        );
-                    }
-
-                    // ==================================
-                    // CHECK PARTICIPANT
-                    // ==================================
-
-                    const isParticipant =
-                        conversation.participants.some(
-                            (participantId) =>
-                                participantId.toString() ===
-                                currentUserId.toString()
-                        );
-
-                    if (!isParticipant) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "You are not a participant of this conversation",
-                            }
-                        );
-                    }
-
-                    // ==================================
-                    // DON'T READ OWN MESSAGE
-                    // ==================================
-
-                    if (
-                        message.sender.toString() ===
-                        currentUserId.toString()
-                    ) {
-                        return;
-                    }
-
-                    // ==================================
-                    // CHECK ALREADY READ
-                    // ==================================
-
-                    const alreadyRead =
-                        message.readBy?.some(
-                            (item) =>
-                                item.user
-                                    ?.toString() ===
-                                currentUserId.toString()
-                        );
-
-                    // ==================================
-                    // SAVE READ STATUS
-                    // ==================================
-
-                    if (!alreadyRead) {
-                        if (!message.readBy) {
-                            message.readBy = [];
-                        }
-
-                        const readAt =
-                            new Date();
-
-                        message.readBy.push({
-                            user: currentUserId,
-                            readAt,
-                        });
-
-                        await message.save();
-
-                        // ==================================
-                        // NOTIFY SENDER
-                        // ==================================
-
-                        const senderRoom =
-                            message.sender.toString();
-
-                        io.to(senderRoom).emit(
-                            "message_read",
-                            {
-                                messageId:
-                                    message._id.toString(),
-
-                                userId:
-                                    currentUserId.toString(),
-
-                                readAt,
-                            }
-                        );
-
-                        console.log(
-                            `Message ${messageId} read by user ${currentUserId}`
-                        );
-                    }
-                } catch (error) {
-                    console.error(
-                        "message_read error:",
-                        error.message
-                    );
-
-                    socket.emit(
-                        "message_error",
-                        {
-                            success: false,
-                            message:
-                                "Failed to update read status",
-                        }
-                    );
-                }
-            }
-        );
-
-        // TYPING START
-
-        socket.on(
-            "typing_start",
-            ({
-                conversationId,
-                receiverId,
-                conversationType,
-            }) => {
-                if (!conversationId) {
-                    return;
-                }
-
-                const typingData = {
+        });
+
+        // ---------------------------------------------------------
+        // CHAT: SEND TEXT MESSAGE
+        // ---------------------------------------------------------
+
+        socket.on("send_message", async (data = {}) => {
+            try {
+                const {
                     conversationId,
-                    userId: socket.userId,
-                    userName:
-                        socket.user?.name ||
-                        "Someone",
-                    isTyping: true,
-                };
+                    content,
+                    messageType = "text",
+                } = data;
 
                 if (
-                    conversationType ===
-                    "group"
+                    typeof content !== "string" ||
+                    !content.trim()
                 ) {
-                    socket
-                        .to(
-                            `conversation:${conversationId}`
-                        )
-                        .emit(
-                            "user_typing",
-                            typingData
-                        );
-                } else if (receiverId) {
-                    io.to(receiverId).emit(
-                        "user_typing",
-                        typingData
+                    throw new Error("Message content is required");
+                }
+
+                const { conversation, roomName } =
+                    await requireConversationRoom(conversationId);
+
+                if (messageType !== "text") {
+                    throw new Error(
+                        "Use the appropriate event for this message type"
                     );
                 }
+
+                const message = await Message.create({
+                    conversation: conversation._id,
+                    sender: socket.user._id,
+                    content: content.trim(),
+                    messageType: "text",
+                });
+
+                conversation.lastMessage = message._id;
+                conversation.lastMessageAt = new Date();
+
+                await conversation.save();
+
+                const populatedMessage = await Message.findById(
+                    message._id
+                ).populate("sender", MESSAGE_POPULATE_FIELDS);
+
+                io.to(roomName).emit("new_message", {
+                    success: true,
+                    message: populatedMessage,
+                });
+            } catch (error) {
+                socket.emit("message_error", {
+                    success: false,
+                    message:
+                        error.message || "Failed to send message",
+                });
             }
-        );
+        });
 
-        // TYPING STOP
+        // ---------------------------------------------------------
+        // CHAT: SEND FILE MESSAGE
+        // ---------------------------------------------------------
 
-        socket.on(
-            "typing_stop",
-            ({
-                conversationId,
-                receiverId,
-                conversationType,
-            }) => {
-                if (!conversationId) {
-                    return;
-                }
-
-                const typingData = {
-                    conversationId,
-                    userId: socket.userId,
-                    userName:
-                        socket.user?.name ||
-                        "Someone",
-                    isTyping: false,
-                };
+        socket.on("send_file_message", async (data = {}) => {
+            try {
+                const { conversationId, attachment } = data;
 
                 if (
-                    conversationType ===
-                    "group"
+                    !attachment ||
+                    typeof attachment.url !== "string" ||
+                    !attachment.url.trim()
                 ) {
-                    socket
-                        .to(
-                            `conversation:${conversationId}`
-                        )
-                        .emit(
-                            "user_typing",
-                            typingData
-                        );
-                } else if (receiverId) {
-                    io.to(receiverId).emit(
-                        "user_typing",
-                        typingData
-                    );
+                    throw new Error("File attachment is required");
                 }
-            }
-        );
 
-        // EDIT MESSAGE
+                const { conversation, roomName } =
+                    await requireConversationRoom(conversationId);
 
-        socket.on(
-            "edit_message",
-            async (data) => {
-                try {
-                    const {
-                        messageId,
-                        content,
-                    } = data || {};
+                const mimeType = attachment.mimeType || "";
+                let messageType = "file";
 
-                    if (!messageId) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "Message ID is required",
-                            }
-                        );
-                    }
-
-                    if (
-                        !mongoose.Types.ObjectId.isValid(
-                            messageId
-                        )
-                    ) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "Invalid message ID",
-                            }
-                        );
-                    }
-
-                    if (
-                        !content ||
-                        !content.trim()
-                    ) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "Message content is required",
-                            }
-                        );
-                    }
-
-                    const currentUserId =
-                        socket.user?._id;
-
-                    if (!currentUserId) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "Authenticated user ID not found",
-                            }
-                        );
-                    }
-
-                    const message =
-                        await Message.findById(
-                            messageId
-                        );
-
-                    if (!message) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "Message not found",
-                            }
-                        );
-                    }
-
-                    // ==================================
-                    // ONLY SENDER CAN EDIT
-                    // ==================================
-
-                    if (
-                        String(message.sender) !==
-                        String(currentUserId)
-                    ) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "You can only edit your own messages",
-                            }
-                        );
-                    }
-
-                    // ==================================
-                    // CHECK DELETED
-                    // ==================================
-
-                    if (message.isDeleted) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "Deleted message cannot be edited",
-                            }
-                        );
-                    }
-
-                    if (!message.conversation) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "Message conversation is missing",
-                            }
-                        );
-                    }
-
-                    const conversation =
-                        await Conversation.findById(
-                            message.conversation
-                        );
-
-                    if (!conversation) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "Conversation not found",
-                            }
-                        );
-                    }
-
-                    if (conversation.isDeleted) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "Conversation is deleted",
-                            }
-                        );
-                    }
-
-                    // ==================================
-                    // CHECK PARTICIPANT
-                    // ==================================
-
-                    const isParticipant =
-                        conversation.participants?.some(
-                            (participantId) =>
-                                participantId &&
-                                String(
-                                    participantId
-                                ) ===
-                                String(
-                                    currentUserId
-                                )
-                        );
-
-                    if (!isParticipant) {
-                        return socket.emit(
-                            "message_error",
-                            {
-                                success: false,
-                                message:
-                                    "You are not a participant of this conversation",
-                            }
-                        );
-                    }
-
-                    // ==================================
-                    // UPDATE MESSAGE
-                    // ==================================
-
-                    message.content =
-                        content.trim();
-
-                    message.isEdited = true;
-
-                    message.editedAt =
-                        new Date();
-
-                    await message.save();
-
-                    // ==================================
-                    // CONVERSATION ROOM
-                    // ==================================
-
-                    const conversationRoom =
-                        String(
-                            message.conversation
-                        );
-
-                    // ==================================
-                    // REAL-TIME UPDATE
-                    // ==================================
-
-                    io.to(
-                        conversationRoom
-                    ).emit(
-                        "message_edited",
-                        {
-                            success: true,
-
-                            messageId:
-                                String(
-                                    message._id
-                                ),
-
-                            conversationId:
-                                conversationRoom,
-
-                            content:
-                                message.content,
-
-                            isEdited:
-                                message.isEdited,
-
-                            editedAt:
-                                message.editedAt,
-                        }
-                    );
-                } catch (error) {
-                    console.error(
-                        "EDIT MESSAGE ERROR:",
-                        error.message
-                    );
-
-                    socket.emit(
-                        "message_error",
-                        {
-                            success: false,
-                            message:
-                                error.message,
-                        }
-                    );
+                if (mimeType.startsWith("image/")) {
+                    messageType = "image";
+                } else if (mimeType.startsWith("video/")) {
+                    messageType = "video";
+                } else if (mimeType.startsWith("audio/")) {
+                    messageType = "audio";
+                } else if (
+                    mimeType === "application/pdf" ||
+                    mimeType.includes("word") ||
+                    mimeType.includes("document")
+                ) {
+                    messageType = "document";
                 }
-            }
-        );
 
-        // DELETE MESSAGE
-
-        socket.on(
-            "delete_message",
-            async ({ messageId }) => {
-                try {
-                    if (!messageId) {
-                        socket.emit(
-                            "message_error",
-                            {
-                                message:
-                                    "Message ID is required",
-                            }
-                        );
-
-                        return;
-                    }
-
-                    const message =
-                        await Message.findById(
-                            messageId
-                        );
-
-                    if (!message) {
-                        socket.emit(
-                            "message_error",
-                            {
-                                message:
-                                    "Message not found",
-                            }
-                        );
-
-                        return;
-                    }
-
-                    // ==================================
-                    // ONLY SENDER CAN DELETE
-                    // ==================================
-
-                    if (
-                        message.sender.toString() !==
-                        socket.user._id.toString()
-                    ) {
-                        socket.emit(
-                            "message_error",
-                            {
-                                message:
-                                    "You can only delete your own message",
-                            }
-                        );
-
-                        return;
-                    }
-
-                    // ==================================
-                    // SOFT DELETE
-                    // ==================================
-
-                    message.isDeleted = true;
-
-                    message.deletedAt =
-                        new Date();
-
-                    message.content = "";
-
-                    await message.save();
-
-                    // ==================================
-                    // REAL-TIME UPDATE
-                    // ==================================
-
-                    io.to(
-                        message.conversation.toString()
-                    ).emit(
-                        "message_deleted",
+                const message = await Message.create({
+                    conversation: conversation._id,
+                    sender: socket.user._id,
+                    content: "",
+                    messageType,
+                    attachments: [
                         {
-                            messageId:
-                                message._id,
-
-                            conversationId:
-                                message.conversation,
-                        }
-                    );
-                } catch (error) {
-                    console.error(
-                        "delete_message error:",
-                        error
-                    );
-
-                    socket.emit(
-                        "message_error",
-                        {
-                            message:
-                                "Failed to delete message",
-                        }
-                    );
-                }
-            }
-        );
-
-        // DISCONNECT
-
-        socket.on(
-            "disconnect",
-            async (reason) => {
-                try {
-                    console.log(
-                        "User disconnected:",
-                        socket.id
-                    );
-
-                    console.log(
-                        "Reason:",
-                        reason
-                    );
-
-                    const userSockets =
-                        onlineUsers.get(
-                            userId
-                        );
-
-                    if (!userSockets) {
-                        return;
-                    }
-
-                    // ==================================
-                    // REMOVE CURRENT SOCKET
-                    // ==================================
-
-                    userSockets.delete(
-                        socket.id
-                    );
-
-                    // ==================================
-                    // USER STILL HAS ANOTHER SOCKET
-                    // ==================================
-
-                    if (
-                        userSockets.size > 0
-                    ) {
-                        console.log(
-                            `User ${userId} still has ${userSockets.size} active socket(s)`
-                        );
-
-                        return;
-                    }
-
-                    // ==================================
-                    // USER COMPLETELY OFFLINE
-                    // ==================================
-
-                    onlineUsers.delete(
-                        userId
-                    );
-
-                    const lastSeen =
-                        new Date();
-
-                    // ==================================
-                    // UPDATE DATABASE
-                    // ==================================
-
-                    await User.findByIdAndUpdate(
-                        userId,
-                        {
-                            isOnline: false,
-                            lastSeen,
+                            url: attachment.url,
+                            publicId: attachment.publicId || null,
+                            fileName: attachment.fileName || null,
+                            originalName:
+                                attachment.originalName || null,
+                            mimeType: attachment.mimeType || null,
+                            extension: attachment.extension || null,
+                            size: Number(attachment.size) || 0,
                         },
-                        {
-                            new: true,
-                        }
-                    );
+                    ],
+                });
 
-                    // ==================================
-                    // TELL OTHER USERS
-                    // ==================================
+                conversation.lastMessage = message._id;
+                conversation.lastMessageAt = new Date();
 
-                    socket.broadcast.emit(
-                        "user_offline",
-                        {
-                            userId,
-                            lastSeen,
-                        }
-                    );
+                await conversation.save();
 
-                    console.log(
-                        `User ${userId} is offline at ${lastSeen.toISOString()}`
-                    );
-                } catch (error) {
-                    console.error(
-                        "Disconnect error:",
-                        error.message
+                const populatedMessage = await Message.findById(
+                    message._id
+                ).populate("sender", MESSAGE_POPULATE_FIELDS);
+
+                io.to(roomName).emit("new_message", {
+                    success: true,
+                    message: populatedMessage,
+                });
+            } catch (error) {
+                socket.emit("message_error", {
+                    success: false,
+                    message:
+                        error.message || "Failed to send file",
+                });
+            }
+        });
+
+        // ---------------------------------------------------------
+        // CHAT: DELIVERY AND READ RECEIPTS
+        // ---------------------------------------------------------
+
+        const updateMessageReceipt = async (
+            messageId,
+            receiptType
+        ) => {
+            requireValidId(messageId, "message ID");
+
+            const message = await Message.findById(messageId);
+
+            if (!message) {
+                throw new Error("Message not found");
+            }
+
+            const conversation = await getActiveConversation(
+                getReferenceId(message.conversation)
+            );
+
+            if (getReferenceId(message.sender) === userId) {
+                return;
+            }
+
+            const field =
+                receiptType === "read" ? "readBy" : "deliveredTo";
+
+            const userAlreadyRecorded = message[field]?.some(
+                (item) => getReferenceId(item.user) === userId
+            );
+
+            if (userAlreadyRecorded) return;
+
+            const timestamp = new Date();
+
+            if (!message[field]) {
+                message[field] = [];
+            }
+
+            message[field].push({
+                user: socket.user._id,
+                ...(receiptType === "read"
+                    ? { readAt: timestamp }
+                    : { deliveredAt: timestamp }),
+            });
+
+            await message.save();
+
+            const eventName =
+                receiptType === "read"
+                    ? "message_read"
+                    : "message_delivered";
+
+            io.to(getReferenceId(message.sender)).emit(eventName, {
+                messageId: message._id.toString(),
+                conversationId: conversation._id.toString(),
+                userId,
+                ...(receiptType === "read"
+                    ? { readAt: timestamp }
+                    : { deliveredAt: timestamp }),
+            });
+        };
+
+        socket.on("message_delivered", async (data = {}) => {
+            try {
+                await updateMessageReceipt(
+                    data.messageId,
+                    "delivered"
+                );
+            } catch (error) {
+                socket.emit("message_error", {
+                    success: false,
+                    message: error.message,
+                });
+            }
+        });
+
+        socket.on("message_read", async (data = {}) => {
+            try {
+                await updateMessageReceipt(
+                    data.messageId,
+                    "read"
+                );
+            } catch (error) {
+                socket.emit("message_error", {
+                    success: false,
+                    message: error.message,
+                });
+            }
+        });
+
+        // ---------------------------------------------------------
+        // CHAT: TYPING INDICATORS
+        // ---------------------------------------------------------
+
+        const handleTyping = async (data = {}, isTyping) => {
+            try {
+                const { conversationId } = data;
+
+                const { conversation, roomName } =
+                    await requireConversationRoom(conversationId);
+
+                socket.to(roomName).emit("user_typing", {
+                    conversationId: conversation._id.toString(),
+                    userId,
+                    userName: getUserName(socket.user),
+                    isTyping,
+                });
+            } catch (error) {
+                emitSocketError(
+                    isTyping ? "typing_start" : "typing_stop",
+                    error
+                );
+            }
+        };
+
+        socket.on("typing_start", (data) =>
+            handleTyping(data, true)
+        );
+
+        socket.on("typing_stop", (data) =>
+            handleTyping(data, false)
+        );
+
+        // ---------------------------------------------------------
+        // CHAT: EDIT MESSAGE
+        // ---------------------------------------------------------
+
+        socket.on("edit_message", async (data = {}) => {
+            try {
+                const { messageId, content } = data;
+
+                requireValidId(messageId, "message ID");
+
+                if (
+                    typeof content !== "string" ||
+                    !content.trim()
+                ) {
+                    throw new Error("Message content is required");
+                }
+
+                const message = await Message.findById(messageId);
+
+                if (!message) {
+                    throw new Error("Message not found");
+                }
+
+                if (getReferenceId(message.sender) !== userId) {
+                    throw new Error(
+                        "You can only edit your own messages"
                     );
                 }
+
+                if (message.isDeleted) {
+                    throw new Error(
+                        "Deleted messages cannot be edited"
+                    );
+                }
+
+                const { conversation, roomName } =
+                    await requireConversationRoom(
+                        getReferenceId(message.conversation)
+                    );
+
+                message.content = content.trim();
+                message.isEdited = true;
+                message.editedAt = new Date();
+
+                await message.save();
+
+                io.to(roomName).emit("message_edited", {
+                    success: true,
+                    messageId: message._id.toString(),
+                    conversationId: conversation._id.toString(),
+                    content: message.content,
+                    isEdited: message.isEdited,
+                    editedAt: message.editedAt,
+                });
+            } catch (error) {
+                socket.emit("message_error", {
+                    success: false,
+                    message:
+                        error.message || "Failed to edit message",
+                });
             }
-        );
+        });
+
+        // ---------------------------------------------------------
+        // CHAT: DELETE MESSAGE
+        // ---------------------------------------------------------
+
+        socket.on("delete_message", async (data = {}) => {
+            try {
+                const { messageId } = data;
+
+                requireValidId(messageId, "message ID");
+
+                const message = await Message.findById(messageId);
+
+                if (!message) {
+                    throw new Error("Message not found");
+                }
+
+                if (getReferenceId(message.sender) !== userId) {
+                    throw new Error(
+                        "You can only delete your own messages"
+                    );
+                }
+
+                const { conversation, roomName } =
+                    await requireConversationRoom(
+                        getReferenceId(message.conversation)
+                    );
+
+                if (message.isDeleted) {
+                    throw new Error("Message is already deleted");
+                }
+
+                message.isDeleted = true;
+                message.deletedAt = new Date();
+                message.content = "";
+
+                await message.save();
+
+                io.to(roomName).emit("message_deleted", {
+                    messageId: message._id.toString(),
+                    conversationId: conversation._id.toString(),
+                });
+            } catch (error) {
+                socket.emit("message_error", {
+                    success: false,
+                    message:
+                        error.message || "Failed to delete message",
+                });
+            }
+        });
+
+        // ---------------------------------------------------------
+        // INTERVIEW DISCONNECT NOTIFICATION
+        // ---------------------------------------------------------
+
+        socket.on("disconnecting", (reason) => {
+            for (const roomName of socket.rooms) {
+                if (!roomName.startsWith("interview:")) {
+                    continue;
+                }
+
+                const interviewId =
+                    roomName.slice("interview:".length);
+
+                // Notify other accounts, not another tab of the same user.
+                socket.to(roomName).emit("interview_user_left", {
+                    interviewId,
+                    userId,
+                    disconnected: true,
+                    reason,
+                });
+            }
+        });
+
+        // ---------------------------------------------------------
+        // CONNECTION DISCONNECT / ONLINE STATUS
+        // ---------------------------------------------------------
+
+        socket.on("disconnect", async (reason) => {
+            console.log("[Socket] Disconnected:", {
+                socketId: socket.id,
+                userId,
+                reason,
+            });
+
+            const userSockets = onlineUsers.get(userId);
+
+            if (!userSockets) return;
+
+            userSockets.delete(socket.id);
+
+            // Keep the user online while another tab/device is connected.
+            if (userSockets.size > 0) {
+                console.log(
+                    `[Socket] ${userId} still has ${userSockets.size} active socket(s)`
+                );
+                return;
+            }
+
+            onlineUsers.delete(userId);
+
+            const lastSeen = new Date();
+
+            try {
+                await User.findByIdAndUpdate(userId, {
+                    isOnline: false,
+                    lastSeen,
+                });
+
+                socket.broadcast.emit("user_offline", {
+                    userId,
+                    lastSeen,
+                });
+            } catch (error) {
+                console.error(
+                    "[Socket] Failed to update offline status:",
+                    error.message
+                );
+            }
+        });
     });
 
-    // UPDATE USER ONLINE
-
-    async function awaitUserOnline(userId) {
-        const now = new Date();
-
-        await User.findByIdAndUpdate(
-            userId,
-            {
-                isOnline: true,
-                lastSeen: now,
-            },
-            {
-                new: true,
-            }
-        );
+    async function setUserOnline(userId) {
+        await User.findByIdAndUpdate(userId, {
+            isOnline: true,
+            lastSeen: new Date(),
+        });
     }
 };

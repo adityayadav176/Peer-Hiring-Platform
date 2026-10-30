@@ -2,39 +2,46 @@ import { ApiError } from "../utils/ApiError.js";
 
 const loginAttempts = new Map();
 
+const MAX_TOKENS = 5;
+const REFILL_INTERVAL = 12 * 1000; // 1 token every 12 seconds
+
 export const loginRateLimit = (req, res, next) => {
-    const ip = req.ip;
+    const ip = req.ip || req.socket.remoteAddress || "unknown";
     const now = Date.now();
 
-    // Create bucket for new IP
-    if (!loginAttempts.has(ip)) {
-        loginAttempts.set(ip, {
-            tokens: 5,
-            lastRefill: now
-        });
+    let bucket = loginAttempts.get(ip);
+
+    // Initialize bucket for a new IP
+    if (!bucket) {
+        bucket = {
+            tokens: MAX_TOKENS,
+            lastRefill: now,
+        };
+
+        loginAttempts.set(ip, bucket);
     }
 
-    const bucket = loginAttempts.get(ip);
-
-    // Refill 1 token every 12 seconds
-    const refillRate = 1;
-    const refillInterval = 12 * 1000;
-
+    // Refill tokens while preserving elapsed time
     const elapsed = now - bucket.lastRefill;
-    const tokensToAdd =
-        Math.floor(elapsed / refillInterval) * refillRate;
+    const tokensToAdd = Math.floor(elapsed / REFILL_INTERVAL);
 
     if (tokensToAdd > 0) {
         bucket.tokens = Math.min(
-            5,
+            MAX_TOKENS,
             bucket.tokens + tokensToAdd
         );
 
-        bucket.lastRefill = now;
+        bucket.lastRefill += tokensToAdd * REFILL_INTERVAL;
     }
 
-    // No tokens left
+    // Reject when the bucket is empty
     if (bucket.tokens <= 0) {
+        res.set("Retry-After", String(
+            Math.ceil(
+                (REFILL_INTERVAL - (now - bucket.lastRefill)) / 1000
+            )
+        ));
+
         return next(
             new ApiError(
                 429,
@@ -43,8 +50,8 @@ export const loginRateLimit = (req, res, next) => {
         );
     }
 
-    // Consume token
+    // Consume one token
     bucket.tokens--;
 
-    next();
+    return next();
 };
