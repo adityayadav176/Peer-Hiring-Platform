@@ -45,9 +45,15 @@ const getJobForApplication = async (application) => {
 /**
  * Populate the conversation fields used by the frontend.
  */
+/**
+ * Populate the conversation fields used by the frontend.
+ */
 const populateConversation = (query) => {
   return query
-    .populate("participants", "name email avatar role")
+    .populate(
+      "participants",
+      "name fullname username email avatar avatarUrl profileImage profilePicture photo role isOnline lastSeen"
+    )
     .populate("lastMessage")
     .populate({
       path: "application",
@@ -57,7 +63,8 @@ const populateConversation = (query) => {
         select: "title recruiterId",
         populate: {
           path: "recruiterId",
-          select: "name email avatar role",
+          select:
+            "name fullname username email avatar avatarUrl role isOnline lastSeen",
         },
       },
     });

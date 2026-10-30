@@ -89,10 +89,10 @@ const getMessages = asyncHandler(async (req, res) => {
     let limit = Number(req.query.limit);
 
     if (!Number.isInteger(limit) || limit < 1) {
-        limit = 30;
+        limit = 1000;
     }
 
-    limit = Math.min(limit, 50);
+    limit = Math.min(limit, 1000);
 
     const query = {
         conversation: conversation._id,

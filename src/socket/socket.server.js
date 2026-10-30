@@ -1,13 +1,12 @@
 
 import mongoose from "mongoose";
-
-import { Conversation } from "../models/converstion.model.js";
 import { Message } from "../models/message.model.js";
 import { User } from "../models/user.model.js";
 
 import { socketAuth } from "./socket.auth.js";
 import { setIo } from "./socket.manager.js";
 import { authorizeInterviewRoom } from "../services/interviewRoom.service.js";
+import { Conversation } from "../models/converstion.model.js";
 
 const getReferenceId = (value) => {
     if (!value) return null;
@@ -672,10 +671,36 @@ export const initializeSocket = (io) => {
                 emitSocketError("join_conversation", error);
             }
         });
-
-        // ---------------------------------------------------------
-        // CHAT: SEND TEXT MESSAGE
-        // ---------------------------------------------------------
+        
+        socket.on("leave_conversation", async (payload) => {
+            try {
+            const conversationId = payload?.conversationId;
+            
+            if (!mongoose.isValidObjectId(conversationId)) {
+              return;
+            }
+        
+            const conversation = await Conversation.findById(conversationId);
+        
+            if (!conversation) return;
+        
+            const userId = socket.user._id.toString();
+        
+            const isParticipant = conversation.participants.some(
+              (participant) => participant.toString() === userId
+            );
+        
+            if (!isParticipant) return;
+        
+            socket.leave(conversationId.toString());
+        
+            console.log(
+              `User ${userId} left conversation ${conversationId}`
+            );
+        } catch (error) {
+            console.error("Leave conversation error:", error.message);
+        }
+    });
 
         socket.on("send_message", async (data = {}) => {
             try {
@@ -916,7 +941,7 @@ export const initializeSocket = (io) => {
                     isTyping,
                 });
             } catch (error) {
-                emitSocketError(
+                emitSocketError( 
                     isTyping ? "typing_start" : "typing_stop",
                     error
                 );
@@ -930,10 +955,6 @@ export const initializeSocket = (io) => {
         socket.on("typing_stop", (data) =>
             handleTyping(data, false)
         );
-
-        // ---------------------------------------------------------
-        // CHAT: EDIT MESSAGE
-        // ---------------------------------------------------------
 
         socket.on("edit_message", async (data = {}) => {
             try {
@@ -1021,15 +1042,7 @@ export const initializeSocket = (io) => {
                         getReferenceId(message.conversation)
                     );
 
-                if (message.isDeleted) {
-                    throw new Error("Message is already deleted");
-                }
-
-                message.isDeleted = true;
-                message.deletedAt = new Date();
-                message.content = "";
-
-                await message.save();
+                await Message.findByIdAndDelete(messageId);
 
                 io.to(roomName).emit("message_deleted", {
                     messageId: message._id.toString(),
@@ -1116,9 +1129,8 @@ export const initializeSocket = (io) => {
     });
 
     async function setUserOnline(userId) {
-        await User.findByIdAndUpdate(userId, {
-            isOnline: true,
-            lastSeen: new Date(),
-        });
-    }
+    await User.findByIdAndUpdate(userId, {
+        isOnline: true,
+    });
+}
 };

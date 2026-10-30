@@ -120,7 +120,7 @@ const createUserSession = async (req, user) => {
         user.lockUntil = null;
         user.isOnline = true;
         user.lastSeen = new Date();
-        user.lastSeenAt = new Date();
+        user.lastSeen = new Date();
 
         await user.save({ validateBeforeSave: false });
 
@@ -502,7 +502,7 @@ const logoutCurrentUser = asyncHandler(async (req, res) => {
                     $set: {
                         isOnline: false,
                         lastSeen: new Date(),
-                        lastSeenAt: new Date(),
+                        lastSeen: new Date(),
                     },
                 }
             );

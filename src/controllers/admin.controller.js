@@ -180,7 +180,7 @@ const blockUser = asyncHandler(async (req, res) => {
 
     user.isOnline = false;
     user.lastSeen = now;
-    user.lastSeenAt = now;
+    user.lastSeen = now;
 
     await user.save();
 
@@ -1030,7 +1030,7 @@ const updateUserStatus = asyncHandler(async (req, res) => {
         user.tokenVersion += 1;
         user.isOnline = false;
         user.lastSeen = new Date();
-        user.lastSeenAt = new Date();
+        user.lastSeen = new Date();
     }
 
     await user.save();
