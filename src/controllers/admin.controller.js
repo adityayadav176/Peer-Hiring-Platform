@@ -1314,26 +1314,49 @@ const getAdminProfile = asyncHandler(async (req, res) => {
   );
 });
 
-const adminLogout = asyncHandler(async (req, res) => {
-  const cookieOptions = {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite:
-      process.env.NODE_ENV === "production" ? "none" : "lax",
-    path: "/",
-  };
+const ACCESS_TOKEN_DURATION = process.env.ACCESS_TOKEN_EXPIRY;
+const REFRESH_TOKEN_DURATION = process.env.REFRESH_TOKEN_EXPIRY;
 
-  return res
-    .clearCookie("accessToken", cookieOptions)
-    .clearCookie("refreshToken", cookieOptions)
-    .status(200)
-    .json(
-      new ApiResponse(
-        200,
-        {},
-        "Admin Logged Out Successfully"
-      )
-    );
+const cookieOptions = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+  path: "/",
+};
+
+const clearAuthCookies = (res) => {
+  res.clearCookie("accessToken", cookieOptions);
+  res.clearCookie("refreshToken", cookieOptions);
+};
+
+const adminLogout = asyncHandler(async (req, res) => {
+  const admin = req.admin;
+
+  if (!admin) {
+    throw new ApiError(401, "Admin authentication required.");
+  }
+
+  await Admin.updateOne(
+    {
+      _id: admin._id,
+      tokenVersion: admin.tokenVersion,
+    },
+    {
+      $set: {
+        refreshToken: "",
+        refreshTokenExpiresAt: null,
+      },
+      $inc: {
+        tokenVersion: 1,
+      },
+    }
+  );
+
+  clearAuthCookies(res);
+
+  return res.status(200).json(
+    new ApiResponse(200, {}, "Admin logged out successfully.")
+  );
 });
 
 const hashRefreshToken = (token) =>

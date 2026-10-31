@@ -72,6 +72,7 @@ const getSafeUser = async (userId) =>
             "-passwordResetTokenExpiresAt",
             "-deleteAccountOtp",
             "-deleteAccountOtpExpiredAt",
+            "-tokenVersion",
             "-emailVerificationOTP",
             "-emailVerificationOTPExpiry",
             "-twoFactorSecret",
@@ -211,7 +212,7 @@ const registerUser = asyncHandler(async (req, res) => {
         email: normalizedEmail,
         password,
         role: "User",
-        phoneNo: normalizedPhone,
+        ...(normalizedPhone ? { phoneNo: normalizedPhone } : {}),
         avatar: {
             url: avatarUpload.secure_url,
             public_id: avatarUpload.public_id,
@@ -286,73 +287,73 @@ const loginUser = asyncHandler(async (req, res) => {
         }).select("+password");
 
         if (admin) {
-            if (!admin.isActive) {
-                throw new ApiError(403, "Admin account is inactive.");
-            }
+  if (admin.isActive !== true) {
+    throw new ApiError(403, "Admin account is inactive.");
+  }
 
-            if (!admin.password) {
-                throw new ApiError(401, "Invalid email or password.");
-            }
+  if (!admin.password) {
+    throw new ApiError(401, "Invalid email or password.");
+  }
 
-            const passwordCorrect = await bcrypt.compare(
-                password,
-                admin.password
-            );
+  const passwordCorrect = await bcrypt.compare(
+    password,
+    admin.password
+  );
 
-            if (!passwordCorrect) {
-                throw new ApiError(401, "Invalid email or password.");
-            }
+  if (!passwordCorrect) {
+    throw new ApiError(401, "Invalid email or password.");
+  }
 
-            const accessToken = jwt.sign(
-                {
-                    adminId: admin._id.toString(),
-                    type: "admin",
-                },
-                process.env.ACCESS_TOKEN_SECRET,
-                {
-                    expiresIn: process.env.ACCESS_TOKEN_EXPIRY || "15m",
-                }
-            );
+  const tokenVersion = admin.tokenVersion || 0;
 
-            const refreshToken = jwt.sign(
-                {
-                    adminId: admin._id.toString(),
-                    type: "admin",
-                },
-                process.env.REFRESH_TOKEN_SECRET,
-                {
-                    expiresIn: process.env.REFRESH_TOKEN_EXPIRY || "30d",
-                }
-            );
+  const accessToken = jwt.sign(
+    {
+      adminId: admin._id.toString(),
+      type: "admin",
+      tokenVersion,
+    },
+    process.env.ACCESS_TOKEN_SECRET,
+    { expiresIn: "15m" }
+  );
 
-            admin.refreshToken = hashToken(refreshToken);
-            admin.refreshTokenExpiresAt = new Date(
-                Date.now() + REFRESH_TOKEN_DURATION
-            );
-            admin.lastLoginAt = new Date();
+  const refreshToken = jwt.sign(
+    {
+      adminId: admin._id.toString(),
+      type: "admin",
+      tokenVersion,
+    },
+    process.env.REFRESH_TOKEN_SECRET,
+    { expiresIn: "30d" }
+  );
 
-            await admin.save({ validateBeforeSave: false });
+  admin.refreshToken = hashToken(refreshToken);
+  admin.refreshTokenExpiresAt = new Date(
+    Date.now() + REFRESH_TOKEN_DURATION
+  );
+  admin.lastLoginAt = new Date();
 
-            setAuthCookies(res, accessToken, refreshToken);
+  await admin.save({ validateBeforeSave: false });
 
-            return res.status(200).json(
-                new ApiResponse(
-                    200,
-                    {
-                        admin: {
-                            _id: admin._id,
-                            name: admin.name,
-                            email: admin.email,
-                            avatar: admin.avatar,
-                            isActive: admin.isActive,
-                            lastLoginAt: admin.lastLoginAt,
-                        },
-                        type: "admin",
-                    },
-                    "Admin logged in successfully."
-                )
-            );
-        }
+  setAuthCookies(res, accessToken, refreshToken);
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      {
+        admin: {
+          _id: admin._id,
+          name: admin.name,
+          email: admin.email,
+          avatar: admin.avatar,
+          isActive: admin.isActive,
+          lastLoginAt: admin.lastLoginAt,
+        },
+        type: "admin",
+      },
+      "Admin logged in successfully."
+    )
+  );
+}
     }
 
     const userConditions = [];
@@ -1001,9 +1002,19 @@ const deleteAccount = asyncHandler(async (req, res) => {
 const changeName = asyncHandler(async (req, res) => {
     const { name } = req.body || {};
 
-    if (typeof name !== "string" || !name.trim()) {
-        throw new ApiError(400, "Name is required.");
-    }
+    if (
+  typeof name !== "string" ||
+  !name.trim() ||
+  name.trim().length > 100
+) {
+  throw new ApiError(
+    400,
+    "Name must contain between 1 and 100 characters."
+  );
+}
+
+user.name = name.trim();
+await user.save();
 
     const userId = req.user?._id;
 
@@ -1054,14 +1065,19 @@ const fetchUser = asyncHandler(async (req, res) => {
 const googleAuth = asyncHandler(async (req, res) => {
     const { credential, role } = req.body || {};
 
+    // Validate request
     if (!credential) {
         throw new ApiError(400, "Google credential is required.");
     }
 
     if (!process.env.GOOGLE_CLIENT_ID) {
-        throw new ApiError(500, "Google authentication is not configured.");
+        throw new ApiError(
+            500,
+            "Google authentication is not configured."
+        );
     }
 
+    // Verify Google identity
     const ticket = await client.verifyIdToken({
         idToken: credential,
         audience: process.env.GOOGLE_CLIENT_ID,
@@ -1079,7 +1095,30 @@ const googleAuth = asyncHandler(async (req, res) => {
 
     const googleId = payload.sub;
     const normalizedEmail = payload.email.toLowerCase().trim();
-    const adminEmail = process.env.ADMIN_EMAIL?.toLowerCase().trim();
+
+    // Normalize and validate requested role
+    let requestedRole = "User";
+
+    if (role !== undefined && role !== null && role !== "") {
+        const normalizedInputRole = String(role).trim().toLowerCase();
+
+        if (
+            normalizedInputRole !== "User" &&
+            normalizedInputRole !== "recruiter"
+        ) {
+            throw new ApiError(400, "Invalid account role.");
+        }
+
+        requestedRole =
+            normalizedInputRole === "recruiter"
+                ? "recruiter"
+                : "User";
+    }
+
+    // Protect admin account
+    const adminEmail = process.env.ADMIN_EMAIL
+        ?.toLowerCase()
+        .trim();
 
     if (adminEmail && normalizedEmail === adminEmail) {
         throw new ApiError(
@@ -1088,29 +1127,70 @@ const googleAuth = asyncHandler(async (req, res) => {
         );
     }
 
-    const normalizedRole = role === "recruiter" ? "recruiter" : "User";
-
-    let user = await User.findOne({
-        $or: [{ googleId }, { email: normalizedEmail }],
-    }).select("+tokenVersion +twoFactorSecret");
-
-    if (!user) {
-        user = await User.create({
-            googleId,
-            name: payload.name || "Google User",
-            email: normalizedEmail,
-            role: normalizedRole,
-            avatar: {
-                url: payload.picture || "",
-                public_id: "",
-            },
-            isVerified: true,
-        });
-
-        user = await User.findById(user._id).select(
+    // Independently check Google ID and email
+    const [googleAccount, emailAccount] = await Promise.all([
+        User.findOne({ googleId }).select(
             "+tokenVersion +twoFactorSecret"
+        ),
+
+        User.findOne({ email: normalizedEmail }).select(
+            "+tokenVersion +twoFactorSecret"
+        ),
+    ]);
+
+    // Prevent Google ID and email from resolving
+    // to two different accounts.
+    if (
+        googleAccount &&
+        emailAccount &&
+        !googleAccount._id.equals(emailAccount._id)
+    ) {
+        throw new ApiError(
+            409,
+            "This Google account and email are associated with different accounts. Please contact support."
         );
-    } else {
+    }
+
+    let user = emailAccount || googleAccount;
+
+    // 7. Existing account protection
+    if (user) {
+        // Never allow a Google ID linked to another email.
+        if (
+            googleAccount &&
+            googleAccount.email.toLowerCase().trim() !== normalizedEmail
+        ) {
+            throw new ApiError(
+                409,
+                "This Google account is already linked to another email."
+            );
+        }
+
+        // Never overwrite an existing Google account link.
+        if (
+            user.googleId &&
+            user.googleId !== googleId
+        ) {
+            throw new ApiError(
+                409,
+                "This email is already linked to another Google account. Please use your existing login method."
+            );
+        }
+
+        // IMPORTANT:
+        // Existing account role is authoritative.
+        // Never convert User into recruiter or recruiter into User.
+        if (user.role !== requestedRole) {
+            throw new ApiError(
+                409,
+                `An account with this email already exists as ${
+                    user.role === "recruiter" ? "recruiter" : "User"
+                }. Please select the correct account type.`
+            );
+        }
+
+        // Link Google only when the existing account
+        // does not already have a Google ID.
         if (!user.googleId) {
             user.googleId = googleId;
         }
@@ -1122,28 +1202,82 @@ const googleAuth = asyncHandler(async (req, res) => {
             };
         }
 
+        // Google has verified this email.
         user.isVerified = true;
-        await user.save({ validateBeforeSave: false });
+
+        await user.save({
+            validateBeforeSave: false,
+        });
+    }
+
+    // Create an account ONLY if neither
+    // the Google ID nor email exists.
+    else {
+        try {
+            user = await User.create({
+                googleId,
+                name: payload.name || "Google User",
+                email: normalizedEmail,
+
+                // Role is assigned only during registration.
+                role: requestedRole,
+
+                avatar: {
+                    url: payload.picture || "",
+                    public_id: "",
+                },
+
+                isVerified: true,
+            });
+
+            user = await User.findById(user._id).select(
+                "+tokenVersion +twoFactorSecret"
+            );
+        } catch (error) {
+            // Protect against simultaneous Google signup requests
+            // and MongoDB unique-index conflicts.
+            if (error.code === 11000) {
+                throw new ApiError(
+                    409,
+                    "An account with this email or Google account already exists. Please try signing in again."
+                );
+            }
+
+            throw error;
+        }
     }
 
     if (!user) {
-        throw new ApiError(500, "Unable to load Google account.");
+        throw new ApiError(
+            500,
+            "Unable to load Google account."
+        );
     }
 
+    // 9. Blocked account protection
     if (user.accountStatus === "blocked") {
-        throw new ApiError(403, "Your account is blocked.");
+        throw new ApiError(
+            403,
+            "Your account is blocked."
+        );
     }
 
+    // 10. Two-factor authentication
     if (user.twoFactorEnabled) {
         const twoFactorToken = jwt.sign(
             {
                 userId: user._id.toString(),
-                type: user.role === "recruiter" ? "recruiter" : "user",
+                type:
+                    user.role === "recruiter"
+                        ? "recruiter"
+                        : "user",
                 purpose: "login-2fa",
                 tokenVersion: user.tokenVersion || 0,
             },
             process.env.ACCESS_TOKEN_SECRET,
-            { expiresIn: "5m" }
+            {
+                expiresIn: "5m",
+            }
         );
 
         return res.status(200).json(
@@ -1153,25 +1287,37 @@ const googleAuth = asyncHandler(async (req, res) => {
                     twoFactorRequired: true,
                     twoFactorToken,
                     userId: user._id,
-                    type: user.role === "recruiter" ? "recruiter" : "user",
+                    type:
+                        user.role === "recruiter"
+                            ? "recruiter"
+                            : "user",
                 },
                 "Two-factor authentication required."
             )
         );
     }
 
-    const { session, accessToken, refreshToken, safeUser } =
-        await createUserSession(req, user);
+    // 11. Create session
+    const {
+        session,
+        accessToken,
+        refreshToken,
+        safeUser,
+    } = await createUserSession(req, user);
 
     setAuthCookies(res, accessToken, refreshToken);
 
+    // 12. Return existing account role
     return res.status(200).json(
         new ApiResponse(
             200,
             {
                 user: safeUser,
                 session: createSafeSession(session),
-                type: user.role === "recruiter" ? "recruiter" : "user",
+                type:
+                    user.role === "recruiter"
+                        ? "recruiter"
+                        : "user",
             },
             "Google authentication successful."
         )
@@ -1351,147 +1497,215 @@ const verify2FALogin = asyncHandler(async (req, res) => {
     );
 });
 
+const isValidObjectId = (value) =>
+  typeof value === "string" && /^[a-f\d]{24}$/i.test(value);
+
 const refreshAccessToken = asyncHandler(async (req, res) => {
-    const incomingRefreshToken =
-        req.cookies?.refreshToken || req.body?.refreshToken;
+  const incomingRefreshToken =
+    req.cookies?.refreshToken || req.body?.refreshToken;
 
-    if (!incomingRefreshToken) {
-        throw new ApiError(401, "Refresh token is required.");
+  if (
+    typeof incomingRefreshToken !== "string" ||
+    !incomingRefreshToken
+  ) {
+    throw new ApiError(401, "Refresh token is required.");
+  }
+
+  if (
+    !process.env.ACCESS_TOKEN_SECRET ||
+    !process.env.REFRESH_TOKEN_SECRET
+  ) {
+    throw new ApiError(500, "Authentication is not configured.");
+  }
+
+  let decodedToken;
+
+  try {
+    decodedToken = jwt.verify(
+      incomingRefreshToken,
+      process.env.REFRESH_TOKEN_SECRET,
+      { algorithms: ["HS256"] }
+    );
+  } catch {
+    throw new ApiError(401, "Invalid or expired refresh token.");
+  }
+
+  const now = new Date();
+  const oldTokenHash = hashToken(incomingRefreshToken);
+
+  // ADMIN REFRESH
+  if (
+    decodedToken.type === "admin" ||
+    decodedToken.adminId !== undefined
+  ) {
+    if (
+      decodedToken.type !== "admin" ||
+      !isValidObjectId(decodedToken.adminId) ||
+      !Number.isSafeInteger(decodedToken.tokenVersion)
+    ) {
+      throw new ApiError(401, "Invalid admin refresh token.");
     }
 
-    if (!process.env.REFRESH_TOKEN_SECRET) {
-        throw new ApiError(500, "Refresh token secret is not configured.");
-    }
-
-    let decodedToken;
-
-    try {
-        decodedToken = jwt.verify(
-            incomingRefreshToken,
-            process.env.REFRESH_TOKEN_SECRET
-        );
-    } catch {
-        throw new ApiError(401, "Invalid or expired refresh token.");
-    }
-
-    if (decodedToken.type === "admin" && decodedToken.adminId) {
-        const admin = await Admin.findById(decodedToken.adminId).select(
-            "+refreshToken +refreshTokenExpiresAt"
-        );
-
-        if (
-            !admin ||
-            !admin.isActive ||
-            !admin.refreshToken ||
-            admin.refreshToken !== hashToken(incomingRefreshToken) ||
-            !admin.refreshTokenExpiresAt ||
-            admin.refreshTokenExpiresAt <= new Date()
-        ) {
-            throw new ApiError(401, "Admin session expired. Please log in again.");
-        }
-
-        const accessToken = jwt.sign(
-            {
-                adminId: admin._id.toString(),
-                type: "admin",
-            },
-            process.env.ACCESS_TOKEN_SECRET,
-            {
-                expiresIn: process.env.ACCESS_TOKEN_EXPIRY || "15m",
-            }
-        );
-
-        const refreshToken = jwt.sign(
-            {
-                adminId: admin._id.toString(),
-                type: "admin",
-            },
-            process.env.REFRESH_TOKEN_SECRET,
-            {
-                expiresIn: process.env.REFRESH_TOKEN_EXPIRY || "30d",
-            }
-        );
-
-        admin.refreshToken = hashToken(refreshToken);
-        admin.refreshTokenExpiresAt = new Date(
-            Date.now() + REFRESH_TOKEN_DURATION
-        );
-
-        await admin.save({ validateBeforeSave: false });
-
-        setAuthCookies(res, accessToken, refreshToken);
-
-        return res.status(200).json(
-            new ApiResponse(
-                200,
-                { accessToken, type: "admin" },
-                "Admin access token refreshed successfully."
-            )
-        );
-    }
-
-    const userId = decodedToken?._id;
-    const sessionId = decodedToken?.sessionId;
-
-    if (!userId || !sessionId) {
-        throw new ApiError(401, "Invalid refresh token payload.");
-    }
-
-    const session = await Session.findOne({
-        _id: sessionId,
-        userId,
-        refreshToken: hashToken(incomingRefreshToken),
-        refreshTokenExpiresAt: { $gt: new Date() },
-        isActive: true,
-    }).select("+refreshToken");
-
-    if (!session) {
-        throw new ApiError(
-            401,
-            "Session expired or revoked. Please log in again."
-        );
-    }
-
-    const user = await User.findById(userId).select("+tokenVersion");
-
-    if (!user) {
-        await Session.deleteOne({ _id: sessionId });
-        throw new ApiError(401, "User account not found.");
-    }
-
-    if (user.accountStatus && user.accountStatus !== "active") {
-        await Session.deleteOne({ _id: sessionId });
-        throw new ApiError(403, "Your account is not active.");
-    }
+    const admin = await Admin.findById(decodedToken.adminId).select(
+      "+refreshToken +refreshTokenExpiresAt"
+    );
 
     if (
-        decodedToken.tokenVersion !== undefined &&
-        decodedToken.tokenVersion !== (user.tokenVersion || 0)
+      !admin ||
+      admin.isActive !== true ||
+      admin.tokenVersion !== decodedToken.tokenVersion ||
+      !admin.refreshToken ||
+      admin.refreshToken !== oldTokenHash ||
+      !admin.refreshTokenExpiresAt ||
+      admin.refreshTokenExpiresAt <= now
     ) {
-        await Session.deleteOne({ _id: sessionId });
-        throw new ApiError(401, "Session revoked. Please log in again.");
+      throw new ApiError(
+        401,
+        "Admin session expired. Please log in again."
+      );
     }
 
-    const accessToken = await user.generateAccessToken(sessionId.toString());
-    const refreshToken = await user.generateRefreshToken(sessionId.toString());
+    const tokenVersion = admin.tokenVersion;
 
-    session.refreshToken = hashToken(refreshToken);
-    session.refreshTokenExpiresAt = new Date(
-        Date.now() + REFRESH_TOKEN_DURATION
+    const newAccessToken = jwt.sign(
+      {
+        adminId: admin._id.toString(),
+        type: "admin",
+        tokenVersion,
+      },
+      process.env.ACCESS_TOKEN_SECRET,
+      { expiresIn: "15m" }
     );
-    session.lastActiveAt = new Date();
 
-    await session.save();
+    const newRefreshToken = jwt.sign(
+      {
+        adminId: admin._id.toString(),
+        type: "admin",
+        tokenVersion,
+      },
+      process.env.REFRESH_TOKEN_SECRET,
+      { expiresIn: "30d" }
+    );
 
-    setAuthCookies(res, accessToken, refreshToken);
+    // Compare-and-swap: only one request can replace the old token.
+    const updateResult = await Admin.updateOne(
+      {
+        _id: admin._id,
+        isActive: true,
+        tokenVersion,
+        refreshToken: oldTokenHash,
+        refreshTokenExpiresAt: { $gt: now },
+      },
+      {
+        $set: {
+          refreshToken: hashToken(newRefreshToken),
+          refreshTokenExpiresAt: new Date(
+            Date.now() + REFRESH_TOKEN_DURATION
+          ),
+        },
+      }
+    );
+
+    if (updateResult.matchedCount !== 1) {
+      throw new ApiError(
+        401,
+        "Refresh token was already used or revoked."
+      );
+    }
+
+    setAuthCookies(res, newAccessToken, newRefreshToken);
 
     return res.status(200).json(
-        new ApiResponse(
-            200,
-            { accessToken },
-            "Access token refreshed successfully."
-        )
+      new ApiResponse(
+        200,
+        { accessToken: newAccessToken, type: "admin" },
+        "Admin access token refreshed successfully."
+      )
     );
+  }
+
+  // USER / RECRUITER REFRESH
+  if (
+    decodedToken.type === "admin" ||
+    !isValidObjectId(decodedToken._id) ||
+    !isValidObjectId(decodedToken.sessionId) ||
+    !Number.isSafeInteger(decodedToken.tokenVersion)
+  ) {
+    throw new ApiError(401, "Invalid user refresh token.");
+  }
+
+  const user = await User.findById(decodedToken._id);
+
+  if (!user) {
+    throw new ApiError(401, "User account not found.");
+  }
+
+  if (user.accountStatus !== "active") {
+    throw new ApiError(403, "Your account is not active.");
+  }
+
+  if (decodedToken.tokenVersion !== user.tokenVersion) {
+    throw new ApiError(
+      401,
+      "Session revoked. Please log in again."
+    );
+  }
+
+  const sessionFilter = {
+    _id: decodedToken.sessionId,
+    userId: user._id,
+    refreshToken: oldTokenHash,
+    refreshTokenExpiresAt: { $gt: now },
+    isActive: true,
+  };
+
+  const sessionExists = await Session.exists(sessionFilter);
+
+  if (!sessionExists) {
+    throw new ApiError(
+      401,
+      "Session expired or revoked. Please log in again."
+    );
+  }
+
+  const newAccessToken = await user.generateAccessToken(
+    decodedToken.sessionId
+  );
+
+  const newRefreshToken = await user.generateRefreshToken(
+    decodedToken.sessionId
+  );
+
+  // Only the request holding the current hash can rotate this session.
+  const updateResult = await Session.updateOne(
+    sessionFilter,
+    {
+      $set: {
+        refreshToken: hashToken(newRefreshToken),
+        refreshTokenExpiresAt: new Date(
+          Date.now() + REFRESH_TOKEN_DURATION
+        ),
+        lastActiveAt: new Date(),
+      },
+    }
+  );
+
+  if (updateResult.matchedCount !== 1) {
+    throw new ApiError(
+      401,
+      "Refresh token was already used or revoked."
+    );
+  }
+
+  setAuthCookies(res, newAccessToken, newRefreshToken);
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      { accessToken: newAccessToken },
+      "Access token refreshed successfully."
+    )
+  );
 });
 
 export {
