@@ -1,8 +1,6 @@
-
 import mongoose from "mongoose";
 import { Message } from "../models/message.model.js";
 import { User } from "../models/user.model.js";
-
 import { socketAuth } from "./socket.auth.js";
 import { setIo } from "./socket.manager.js";
 import { authorizeInterviewRoom } from "../services/interviewRoom.service.js";
@@ -113,10 +111,6 @@ export const initializeSocket = (io) => {
             }
         };
 
-        // ---------------------------------------------------------
-        // CONVERSATION HELPERS
-        // ---------------------------------------------------------
-
         const isConversationParticipant = (conversation) =>
             conversation.participants.some(
                 (participant) => getReferenceId(participant) === userId
@@ -160,9 +154,6 @@ export const initializeSocket = (io) => {
             return { conversation, roomName };
         };
 
-        // ---------------------------------------------------------
-        // INTERVIEW HELPERS
-        // ---------------------------------------------------------
 
         const getInterviewContext = async (interviewId) => {
             requireValidId(interviewId, "interview ID");
@@ -184,7 +175,7 @@ export const initializeSocket = (io) => {
             let role;
 
             if (candidateId === userId) {
-                role = "candidate";
+                role = "User";
             } else if (recruiterId === userId) {
                 role = "recruiter";
             } else {
@@ -217,120 +208,112 @@ export const initializeSocket = (io) => {
         };
 
         const requireCandidate = (role) => {
-            if (role !== "candidate") {
+            if (role !== "User") {
                 throw new Error(
                     "Only the candidate can trigger this event"
                 );
             }
         };
 
-        // ---------------------------------------------------------
-        // JOIN INTERVIEW
-        // ---------------------------------------------------------
 
-        socket.on("join_interview", async (data = {}) => {
-            const requestedInterviewId =
-                typeof data === "string"
-                    ? data
-                    : data?.interviewId;
+        socket.on("join_interview", async (data = {}, acknowledge) => {
+    const requestedInterviewId =
+        typeof data === "string"
+            ? data
+            : data?.interviewId;
 
-            console.log("[JOIN] Request received:", {
-                socketId: socket.id,
-                userId,
-                interviewId: requestedInterviewId,
-                connected: socket.connected,
-            });
+    console.log("[JOIN] Request received:", {
+        socketId: socket.id,
+        userId,
+        interviewId: requestedInterviewId,
+        connected: socket.connected,
+    });
 
-            try {
-                requireValidId(
-                    requestedInterviewId,
-                    "interview ID"
-                );
+    try {
+        requireValidId(requestedInterviewId, "interview ID");
 
-                // Verify this user is the candidate or recruiter.
-                const context = await getInterviewContext(
-                    requestedInterviewId
-                );
+        const context = await getInterviewContext(
+            requestedInterviewId
+        );
 
-                const { roomName, interviewId, role } = context;
+        const { roomName, interviewId, role } = context;
 
-                // Join the canonical room before acknowledging success.
-                await socket.join(roomName);
+        await socket.join(roomName);
 
-                if (!socket.rooms.has(roomName)) {
-                    throw new Error(
-                        "Failed to join the interview room"
-                    );
-                }
+        if (!socket.rooms.has(roomName)) {
+            throw new Error("Failed to join the interview room");
+        }
 
-                // Only the other participant should count as a peer.
-                const roomSockets = await io
-                    .in(roomName)
-                    .fetchSockets();
+        const roomSockets = await io
+            .in(roomName)
+            .fetchSockets();
 
-                const peerPresent = roomSockets.some((peer) => {
-                    if (peer.id === socket.id) return false;
+        const peerPresent = roomSockets.some((peer) => {
+            if (peer.id === socket.id) return false;
 
-                    const peerUserId = getReferenceId(
-                        peer.userId ?? peer.user?._id
-                    );
+            const peerUserId = getReferenceId(
+                peer.userId ?? peer.user?._id
+            );
 
-                    return peerUserId !== userId;
-                });
-
-                const payload = {
-                    success: true,
-                    interviewId,
-                    role,
-                    peerPresent,
-                };
-
-                console.log("[JOIN] Sending confirmation:", {
-                    socketId: socket.id,
-                    userId,
-                    interviewId,
-                    roomName,
-                    role,
-                    peerPresent,
-                    roomJoined: socket.rooms.has(roomName),
-                });
-
-                socket.emit("interview_joined", payload);
-
-                // Notify other sockets in this interview room.
-                socket.to(roomName).emit("interview_user_joined", {
-                    interviewId,
-                    userId,
-                    role,
-                });
-            } catch (error) {
-                console.error("[JOIN] Failed:", {
-                    socketId: socket.id,
-                    userId,
-                    interviewId: requestedInterviewId,
-                    message: error.message,
-                });
-
-                const errorPayload = {
-                    event: "join_interview",
-                    interviewId: requestedInterviewId || null,
-                    message:
-                        error.message ||
-                        "Unable to join the interview",
-                };
-
-                socket.emit("socket_error", errorPayload);
-
-                socket.emit("interview_error", {
-                    success: false,
-                    ...errorPayload,
-                });
-            }
+            return peerUserId !== userId;
         });
 
-        // ---------------------------------------------------------
-        // WEBRTC SIGNALING
-        // ---------------------------------------------------------
+        const payload = {
+            success: true,
+            interviewId,
+            role,
+            peerPresent,
+        };
+
+        console.log("[JOIN] Sending confirmation:", {
+            socketId: socket.id,
+            userId,
+            interviewId,
+            roomName,
+            role,
+            peerPresent,
+            roomJoined: socket.rooms.has(roomName),
+        });
+
+        // Standard Socket.IO event confirmation.
+        socket.emit("interview_joined", payload);
+
+        // Direct acknowledgement to the requesting client.
+        if (typeof acknowledge === "function") {
+            acknowledge(payload);
+        }
+
+        // Notify the other participant.
+        socket.to(roomName).emit("interview_user_joined", {
+            interviewId,
+            userId,
+            role,
+        });
+
+    } catch (error) {
+        console.error("[JOIN] Failed:", {
+            socketId: socket.id,
+            userId,
+            interviewId: requestedInterviewId,
+            message: error.message,
+            stack: error.stack,
+        });
+
+        const errorPayload = {
+            success: false,
+            event: "join_interview",
+            interviewId: requestedInterviewId || null,
+            message: error.message || "Unable to join the interview",
+        };
+
+        socket.emit("interview_error", errorPayload);
+        socket.emit("socket_error", errorPayload);
+
+        if (typeof acknowledge === "function") {
+            acknowledge(errorPayload);
+        }
+    }
+});
 
         socket.on("offer", async (data = {}) => {
             try {
@@ -366,7 +349,7 @@ export const initializeSocket = (io) => {
                 const context =
                     await requireInterviewRoom(interviewId);
 
-                if (context.role !== "candidate") {
+                if (context.role !== "User") {
                     throw new Error(
                         "Only the candidate can send the initial answer"
                     );
@@ -400,10 +383,6 @@ export const initializeSocket = (io) => {
                 emitSocketError("ice_candidate", error);
             }
         });
-
-        // ---------------------------------------------------------
-        // INTERVIEW CALL EVENTS
-        // ---------------------------------------------------------
 
         socket.on("interview_calling", async (data = {}) => {
             try {
@@ -484,9 +463,6 @@ export const initializeSocket = (io) => {
             }
         });
 
-        // ---------------------------------------------------------
-        // CAMERA, MICROPHONE AND SCREEN SHARING
-        // ---------------------------------------------------------
 
         socket.on("camera_toggled", async (data = {}) => {
             try {
@@ -610,10 +586,6 @@ export const initializeSocket = (io) => {
             }
         });
 
-        // ---------------------------------------------------------
-        // LEAVE INTERVIEW
-        // ---------------------------------------------------------
-
         socket.on("leave_interview", async (data = {}) => {
             try {
                 const context =
@@ -640,9 +612,6 @@ export const initializeSocket = (io) => {
             }
         });
 
-        // ---------------------------------------------------------
-        // CHAT: JOIN CONVERSATION
-        // ---------------------------------------------------------
 
         socket.on("join_conversation", async (data = {}) => {
             try {

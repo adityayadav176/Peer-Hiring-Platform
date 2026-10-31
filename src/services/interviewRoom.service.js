@@ -20,6 +20,15 @@ const authorizeInterviewRoom = async ({ interviewId, userId }) => {
 
   const interview = await Interview.findById(interviewId);
 
+  console.log("[Interview Authorization]", {
+    interviewId,
+    authenticatedUserId: userId.toString(),
+    candidateId: getReferenceId(interview.candidate),
+    recruiterId: getReferenceId(interview.recruiter),
+    interviewType: interview.interviewType,
+    status: interview.status,
+});
+
   if (!interview) {
     throw new ApiError(404, "Interview not found");
   }
