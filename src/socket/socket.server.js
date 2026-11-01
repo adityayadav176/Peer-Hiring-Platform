@@ -31,14 +31,76 @@ export const initializeSocket = (io) => {
     setIo(io);
     io.use(socketAuth);
 
-    // Tracks active socket connections for each authenticated user.
+    // Tracks all active socket connections for each user.
     const onlineUsers = new Map();
 
-    io.on("connection", async (socket) => {
+    // Prevents overlapping database presence updates for the same user.
+    const presenceSyncs = new Map();
+
+    /**
+     * Synchronize database presence with the current in-memory socket state.
+     *
+     * If a user disconnects while an online update is running, this loop
+     * detects the changed state and applies the latest state afterward.
+     */
+    const schedulePresenceSync = (userId) => {
+        const existingSync = presenceSyncs.get(userId);
+
+        if (existingSync) {
+            return existingSync;
+        }
+
+        const syncPromise = (async () => {
+            while (true) {
+                const shouldBeOnline = onlineUsers.has(userId);
+
+                const update = shouldBeOnline
+                    ? { isOnline: true }
+                    : {
+                        isOnline: false,
+                        lastSeen: new Date(),
+                    };
+
+                await User.findByIdAndUpdate(userId, update);
+
+                // If presence changed while the DB operation was running,
+                // repeat with the latest state.
+                if (onlineUsers.has(userId) === shouldBeOnline) {
+                    break;
+                }
+            }
+        })()
+            .catch((error) => {
+                console.error(
+                    "[Socket] Presence synchronization failed:",
+                    {
+                        userId,
+                        message: error.message,
+                    }
+                );
+            })
+            .finally(() => {
+                presenceSyncs.delete(userId);
+            });
+
+        presenceSyncs.set(userId, syncPromise);
+
+        return syncPromise;
+    };
+
+    io.on("connection", (socket) => {
+        /*
+         * IMPORTANT:
+         * Do not make this connection callback async.
+         *
+         * Register socket listeners immediately. Never await MongoDB,
+         * socket.join(), or another asynchronous operation before the
+         * event listeners have been registered.
+         */
+
         const rawUserId = socket.userId ?? socket.user?._id;
         const userId = getReferenceId(rawUserId);
 
-        // Every authenticated socket must have a valid MongoDB user ID.
         if (!userId || !isValidObjectId(userId)) {
             console.error("[Socket] Invalid authenticated user:", {
                 socketId: socket.id,
@@ -56,8 +118,9 @@ export const initializeSocket = (io) => {
             transport: socket.conn.transport.name,
         });
 
-        // Personal room for notifications and message receipts.
-        await socket.join(userId);
+        // ---------------------------------------------------------
+        // ONLINE PRESENCE
+        // ---------------------------------------------------------
 
         let isFirstConnection = false;
 
@@ -73,16 +136,35 @@ export const initializeSocket = (io) => {
         });
 
         if (isFirstConnection) {
-            try {
-                await setUserOnline(userId);
-                socket.broadcast.emit("user_online", { userId });
-            } catch (error) {
-                console.error(
-                    "[Socket] Failed to set user online:",
-                    error.message
-                );
-            }
+            // Do not block listener registration on this database update.
+            void schedulePresenceSync(userId);
+
+            socket.broadcast.emit("user_online", {
+                userId,
+            });
         }
+
+        // ---------------------------------------------------------
+        // PERSONAL ROOM
+        // ---------------------------------------------------------
+
+        // Start joining the personal room without blocking this callback.
+        // Operations that depend on this room can await this promise.
+        const personalRoomReady = Promise.resolve().then(() =>
+            socket.join(userId)
+        );
+
+        personalRoomReady.catch((error) => {
+            console.error("[Socket] Personal room join failed:", {
+                socketId: socket.id,
+                userId,
+                message: error.message,
+            });
+        });
+
+        // ---------------------------------------------------------
+        // COMMON HELPERS
+        // ---------------------------------------------------------
 
         const emitSocketError = (event, error) => {
             console.error(`[Socket] ${event} error:`, error.message);
@@ -94,7 +176,11 @@ export const initializeSocket = (io) => {
         };
 
         const requireValue = (value, label) => {
-            if (value === undefined || value === null || value === "") {
+            if (
+                value === undefined ||
+                value === null ||
+                value === ""
+            ) {
                 throw new Error(`${label} is required`);
             }
         };
@@ -111,10 +197,15 @@ export const initializeSocket = (io) => {
             }
         };
 
+        // ---------------------------------------------------------
+        // CHAT HELPERS
+        // ---------------------------------------------------------
+
         const isConversationParticipant = (conversation) =>
-            conversation.participants.some(
-                (participant) => getReferenceId(participant) === userId
-            );
+            conversation.participants?.some(
+                (participant) =>
+                    getReferenceId(participant) === userId
+            ) ?? false;
 
         const getActiveConversation = async (conversationId) => {
             requireValidId(conversationId, "conversation ID");
@@ -151,9 +242,15 @@ export const initializeSocket = (io) => {
                 );
             }
 
-            return { conversation, roomName };
+            return {
+                conversation,
+                roomName,
+            };
         };
 
+        // ---------------------------------------------------------
+        // INTERVIEW HELPERS
+        // ---------------------------------------------------------
 
         const getInterviewContext = async (interviewId) => {
             requireValidId(interviewId, "interview ID");
@@ -184,7 +281,8 @@ export const initializeSocket = (io) => {
                 );
             }
 
-            const canonicalInterviewId = interview._id.toString();
+            const canonicalInterviewId =
+                interview._id.toString();
 
             return {
                 interview,
@@ -196,7 +294,12 @@ export const initializeSocket = (io) => {
         };
 
         const requireInterviewRoom = async (interviewId) => {
-            const context = await getInterviewContext(interviewId);
+            if (!socket.connected) {
+                throw new Error("Socket is disconnected");
+            }
+
+            const context =
+                await getInterviewContext(interviewId);
 
             if (!socket.rooms.has(context.roomName)) {
                 throw new Error(
@@ -215,105 +318,150 @@ export const initializeSocket = (io) => {
             }
         };
 
+        // =========================================================
+        // INTERVIEW: JOIN ROOM
+        // =========================================================
 
         socket.on("join_interview", async (data = {}, acknowledge) => {
-    const requestedInterviewId =
-        typeof data === "string"
-            ? data
-            : data?.interviewId;
+            const requestedInterviewId =
+                typeof data === "string"
+                    ? data
+                    : data?.interviewId;
 
-    console.log("[JOIN] Request received:", {
-        socketId: socket.id,
-        userId,
-        interviewId: requestedInterviewId,
-        connected: socket.connected,
-    });
+            console.log("[JOIN] Request received:", {
+                socketId: socket.id,
+                userId,
+                interviewId: requestedInterviewId,
+                connected: socket.connected,
+            });
 
-    try {
-        requireValidId(requestedInterviewId, "interview ID");
+            try {
+                if (!socket.connected) {
+                    throw new Error("Socket is disconnected");
+                }
 
-        const context = await getInterviewContext(
-            requestedInterviewId
-        );
+                requireValidId(
+                    requestedInterviewId,
+                    "interview ID"
+                );
 
-        const { roomName, interviewId, role } = context;
+                const context = await getInterviewContext(
+                    requestedInterviewId
+                );
 
-        await socket.join(roomName);
+                const {
+                    roomName,
+                    interviewId,
+                    role,
+                } = context;
 
-        if (!socket.rooms.has(roomName)) {
-            throw new Error("Failed to join the interview room");
-        }
+                // Authorization may have taken time. Do not join a room
+                // for a socket that disconnected during that operation.
+                if (!socket.connected) {
+                    throw new Error(
+                        "Socket disconnected before joining the interview"
+                    );
+                }
 
-        const roomSockets = await io
-            .in(roomName)
-            .fetchSockets();
+                await socket.join(roomName);
 
-        const peerPresent = roomSockets.some((peer) => {
-            if (peer.id === socket.id) return false;
+                // Protect against a disconnect while socket.join() was
+                // pending, particularly with asynchronous adapters.
+                if (!socket.connected) {
+                    await socket.leave(roomName);
+                    throw new Error(
+                        "Socket disconnected while joining the interview"
+                    );
+                }
 
-            const peerUserId = getReferenceId(
-                peer.userId ?? peer.user?._id
-            );
+                if (!socket.rooms.has(roomName)) {
+                    throw new Error(
+                        "Failed to join the interview room"
+                    );
+                }
 
-            return peerUserId !== userId;
+                const roomSockets = await io
+                    .in(roomName)
+                    .fetchSockets();
+
+                const peerPresent = roomSockets.some((peer) => {
+                    if (peer.id === socket.id) {
+                        return false;
+                    }
+
+                    const peerUserId = getReferenceId(
+                        peer.userId ?? peer.user?._id
+                    );
+
+                    return peerUserId !== userId;
+                });
+
+                const payload = {
+                    success: true,
+                    interviewId,
+                    role,
+                    peerPresent,
+                };
+
+                console.log("[JOIN] Sending confirmation:", {
+                    socketId: socket.id,
+                    userId,
+                    interviewId,
+                    roomName,
+                    role,
+                    peerPresent,
+                    roomJoined: socket.rooms.has(roomName),
+                });
+
+                // Preserve the existing frontend event.
+                socket.emit("interview_joined", payload);
+
+                // Preserve optional Socket.IO acknowledgement support.
+                if (typeof acknowledge === "function") {
+                    acknowledge(payload);
+                }
+
+                // Notify the other participant.
+                socket.to(roomName).emit(
+                    "interview_user_joined",
+                    {
+                        interviewId,
+                        userId,
+                        role,
+                    }
+                );
+            } catch (error) {
+                console.error("[JOIN] Failed:", {
+                    socketId: socket.id,
+                    userId,
+                    interviewId: requestedInterviewId,
+                    message: error.message,
+                    stack: error.stack,
+                });
+
+                const errorPayload = {
+                    success: false,
+                    event: "join_interview",
+                    interviewId: requestedInterviewId || null,
+                    message:
+                        error.message ||
+                        "Unable to join the interview",
+                };
+
+                if (socket.connected) {
+                    socket.emit("interview_error", errorPayload);
+                    socket.emit("socket_error", errorPayload);
+                }
+
+                if (typeof acknowledge === "function") {
+                    acknowledge(errorPayload);
+                }
+            }
         });
 
-        const payload = {
-            success: true,
-            interviewId,
-            role,
-            peerPresent,
-        };
-
-        console.log("[JOIN] Sending confirmation:", {
-            socketId: socket.id,
-            userId,
-            interviewId,
-            roomName,
-            role,
-            peerPresent,
-            roomJoined: socket.rooms.has(roomName),
-        });
-
-        // Standard Socket.IO event confirmation.
-        socket.emit("interview_joined", payload);
-
-        // Direct acknowledgement to the requesting client.
-        if (typeof acknowledge === "function") {
-            acknowledge(payload);
-        }
-
-        // Notify the other participant.
-        socket.to(roomName).emit("interview_user_joined", {
-            interviewId,
-            userId,
-            role,
-        });
-
-    } catch (error) {
-        console.error("[JOIN] Failed:", {
-            socketId: socket.id,
-            userId,
-            interviewId: requestedInterviewId,
-            message: error.message,
-            stack: error.stack,
-        });
-
-        const errorPayload = {
-            success: false,
-            event: "join_interview",
-            interviewId: requestedInterviewId || null,
-            message: error.message || "Unable to join the interview",
-        };
-
-        socket.emit("interview_error", errorPayload);
-        socket.emit("socket_error", errorPayload);
-
-        if (typeof acknowledge === "function") {
-            acknowledge(errorPayload);
-        }
-    }
-});
+        // =========================================================
+        // INTERVIEW: WEBRTC OFFER
+        // =========================================================
 
         socket.on("offer", async (data = {}) => {
             try {
@@ -340,6 +488,10 @@ export const initializeSocket = (io) => {
             }
         });
 
+        // =========================================================
+        // INTERVIEW: WEBRTC ANSWER
+        // =========================================================
+
         socket.on("answer", async (data = {}) => {
             try {
                 const { interviewId, answer } = data;
@@ -365,6 +517,10 @@ export const initializeSocket = (io) => {
             }
         });
 
+        // =========================================================
+        // INTERVIEW: ICE CANDIDATES
+        // =========================================================
+
         socket.on("ice_candidate", async (data = {}) => {
             try {
                 const { interviewId, candidate } = data;
@@ -374,15 +530,22 @@ export const initializeSocket = (io) => {
                 const context =
                     await requireInterviewRoom(interviewId);
 
-                socket.to(context.roomName).emit("ice_candidate", {
-                    interviewId: context.interviewId,
-                    userId,
-                    candidate,
-                });
+                socket.to(context.roomName).emit(
+                    "ice_candidate",
+                    {
+                        interviewId: context.interviewId,
+                        userId,
+                        candidate,
+                    }
+                );
             } catch (error) {
                 emitSocketError("ice_candidate", error);
             }
         });
+
+        // =========================================================
+        // INTERVIEW: CALL SIGNALING
+        // =========================================================
 
         socket.on("interview_calling", async (data = {}) => {
             try {
@@ -456,13 +619,20 @@ export const initializeSocket = (io) => {
                     endedAt: new Date(),
                 };
 
-                socket.to(context.roomName).emit("call_ended", payload);
+                socket.to(context.roomName).emit(
+                    "call_ended",
+                    payload
+                );
+
                 socket.emit("call_ended", payload);
             } catch (error) {
                 emitSocketError("call_ended", error);
             }
         });
 
+        // =========================================================
+        // INTERVIEW: CAMERA / MICROPHONE
+        // =========================================================
 
         socket.on("camera_toggled", async (data = {}) => {
             try {
@@ -508,6 +678,10 @@ export const initializeSocket = (io) => {
             }
         });
 
+        // =========================================================
+        // INTERVIEW: SCREEN SHARING
+        // =========================================================
+
         socket.on("screen_share_started", async (data = {}) => {
             try {
                 const context =
@@ -542,9 +716,9 @@ export const initializeSocket = (io) => {
             }
         });
 
-        // ---------------------------------------------------------
-        // CANDIDATE TAB MONITORING
-        // ---------------------------------------------------------
+        // =========================================================
+        // INTERVIEW: CANDIDATE TAB MONITORING
+        // =========================================================
 
         socket.on("candidate_tab_changed", async (data = {}) => {
             try {
@@ -586,6 +760,10 @@ export const initializeSocket = (io) => {
             }
         });
 
+        // =========================================================
+        // INTERVIEW: LEAVE ROOM
+        // =========================================================
+
         socket.on("leave_interview", async (data = {}) => {
             try {
                 const context =
@@ -593,7 +771,6 @@ export const initializeSocket = (io) => {
 
                 await socket.leave(context.roomName);
 
-                // Notify remaining room members.
                 socket.to(context.roomName).emit(
                     "interview_user_left",
                     {
@@ -612,6 +789,9 @@ export const initializeSocket = (io) => {
             }
         });
 
+        // =========================================================
+        // CHAT: JOIN CONVERSATION
+        // =========================================================
 
         socket.on("join_conversation", async (data = {}) => {
             try {
@@ -625,7 +805,25 @@ export const initializeSocket = (io) => {
 
                 const roomName = conversation._id.toString();
 
+                if (!socket.connected) {
+                    throw new Error("Socket is disconnected");
+                }
+
                 await socket.join(roomName);
+
+                if (!socket.connected) {
+                    await socket.leave(roomName);
+
+                    throw new Error(
+                        "Socket disconnected while joining conversation"
+                    );
+                }
+
+                if (!socket.rooms.has(roomName)) {
+                    throw new Error(
+                        "Failed to join the conversation room"
+                    );
+                }
 
                 socket.emit("conversation_joined", {
                     success: true,
@@ -635,41 +833,46 @@ export const initializeSocket = (io) => {
                 console.log("[Chat] User joined conversation:", {
                     userId,
                     conversationId: roomName,
+                    socketId: socket.id,
                 });
             } catch (error) {
                 emitSocketError("join_conversation", error);
             }
         });
-        
-        socket.on("leave_conversation", async (payload) => {
+
+        // =========================================================
+        // CHAT: LEAVE CONVERSATION
+        // =========================================================
+
+        socket.on("leave_conversation", async (payload = {}) => {
             try {
-            const conversationId = payload?.conversationId;
-            
-            if (!mongoose.isValidObjectId(conversationId)) {
-              return;
+                const conversationId =
+                    typeof payload === "string"
+                        ? payload
+                        : payload?.conversationId;
+
+                const conversation =
+                    await getActiveConversation(conversationId);
+
+                const roomName = conversation._id.toString();
+
+                if (socket.rooms.has(roomName)) {
+                    await socket.leave(roomName);
+                }
+
+                console.log("[Chat] User left conversation:", {
+                    userId,
+                    conversationId: roomName,
+                    socketId: socket.id,
+                });
+            } catch (error) {
+                emitSocketError("leave_conversation", error);
             }
-        
-            const conversation = await Conversation.findById(conversationId);
-        
-            if (!conversation) return;
-        
-            const userId = socket.user._id.toString();
-        
-            const isParticipant = conversation.participants.some(
-              (participant) => participant.toString() === userId
-            );
-        
-            if (!isParticipant) return;
-        
-            socket.leave(conversationId.toString());
-        
-            console.log(
-              `User ${userId} left conversation ${conversationId}`
-            );
-        } catch (error) {
-            console.error("Leave conversation error:", error.message);
-        }
-    });
+        });
+
+        // =========================================================
+        // CHAT: SEND TEXT MESSAGE
+        // =========================================================
 
         socket.on("send_message", async (data = {}) => {
             try {
@@ -709,7 +912,10 @@ export const initializeSocket = (io) => {
 
                 const populatedMessage = await Message.findById(
                     message._id
-                ).populate("sender", MESSAGE_POPULATE_FIELDS);
+                ).populate(
+                    "sender",
+                    MESSAGE_POPULATE_FIELDS
+                );
 
                 io.to(roomName).emit("new_message", {
                     success: true,
@@ -724,13 +930,16 @@ export const initializeSocket = (io) => {
             }
         });
 
-        // ---------------------------------------------------------
+        // =========================================================
         // CHAT: SEND FILE MESSAGE
-        // ---------------------------------------------------------
+        // =========================================================
 
         socket.on("send_file_message", async (data = {}) => {
             try {
-                const { conversationId, attachment } = data;
+                const {
+                    conversationId,
+                    attachment,
+                } = data;
 
                 if (
                     !attachment ||
@@ -744,6 +953,7 @@ export const initializeSocket = (io) => {
                     await requireConversationRoom(conversationId);
 
                 const mimeType = attachment.mimeType || "";
+
                 let messageType = "file";
 
                 if (mimeType.startsWith("image/")) {
@@ -786,7 +996,10 @@ export const initializeSocket = (io) => {
 
                 const populatedMessage = await Message.findById(
                     message._id
-                ).populate("sender", MESSAGE_POPULATE_FIELDS);
+                ).populate(
+                    "sender",
+                    MESSAGE_POPULATE_FIELDS
+                );
 
                 io.to(roomName).emit("new_message", {
                     success: true,
@@ -801,9 +1014,9 @@ export const initializeSocket = (io) => {
             }
         });
 
-        // ---------------------------------------------------------
+        // =========================================================
         // CHAT: DELIVERY AND READ RECEIPTS
-        // ---------------------------------------------------------
+        // =========================================================
 
         const updateMessageReceipt = async (
             messageId,
@@ -821,47 +1034,79 @@ export const initializeSocket = (io) => {
                 getReferenceId(message.conversation)
             );
 
+            // A sender should not mark their own message as delivered/read.
             if (getReferenceId(message.sender) === userId) {
                 return;
             }
 
             const field =
-                receiptType === "read" ? "readBy" : "deliveredTo";
-
-            const userAlreadyRecorded = message[field]?.some(
-                (item) => getReferenceId(item.user) === userId
-            );
-
-            if (userAlreadyRecorded) return;
+                receiptType === "read"
+                    ? "readBy"
+                    : "deliveredTo";
 
             const timestamp = new Date();
 
-            if (!message[field]) {
-                message[field] = [];
-            }
-
-            message[field].push({
+            const receipt = {
                 user: socket.user._id,
                 ...(receiptType === "read"
                     ? { readAt: timestamp }
                     : { deliveredAt: timestamp }),
-            });
+            };
 
-            await message.save();
+            /*
+             * Atomic update prevents two simultaneous receipt events
+             * from adding duplicate entries for the same user.
+             */
+            const updatedMessage =
+                await Message.findOneAndUpdate(
+                    {
+                        _id: messageId,
+                        [field]: {
+                            $not: {
+                                $elemMatch: {
+                                    user: socket.user._id,
+                                },
+                            },
+                        },
+                    },
+                    {
+                        $push: {
+                            [field]: receipt,
+                        },
+                    },
+                    {
+                        new: true,
+                    }
+                );
+
+            // Another concurrent event may already have recorded it.
+            if (!updatedMessage) {
+                return;
+            }
+
+            // Ensure the personal room is ready before sending the receipt.
+            await personalRoomReady;
+
+            if (!socket.connected) {
+                return;
+            }
 
             const eventName =
                 receiptType === "read"
                     ? "message_read"
                     : "message_delivered";
 
-            io.to(getReferenceId(message.sender)).emit(eventName, {
-                messageId: message._id.toString(),
-                conversationId: conversation._id.toString(),
-                userId,
-                ...(receiptType === "read"
-                    ? { readAt: timestamp }
-                    : { deliveredAt: timestamp }),
-            });
+            io.to(getReferenceId(message.sender)).emit(
+                eventName,
+                {
+                    messageId: message._id.toString(),
+                    conversationId: conversation._id.toString(),
+                    userId,
+                    ...(receiptType === "read"
+                        ? { readAt: timestamp }
+                        : { deliveredAt: timestamp }),
+                }
+            );
         };
 
         socket.on("message_delivered", async (data = {}) => {
@@ -892,9 +1137,9 @@ export const initializeSocket = (io) => {
             }
         });
 
-        // ---------------------------------------------------------
+        // =========================================================
         // CHAT: TYPING INDICATORS
-        // ---------------------------------------------------------
+        // =========================================================
 
         const handleTyping = async (data = {}, isTyping) => {
             try {
@@ -910,20 +1155,24 @@ export const initializeSocket = (io) => {
                     isTyping,
                 });
             } catch (error) {
-                emitSocketError( 
+                emitSocketError(
                     isTyping ? "typing_start" : "typing_stop",
                     error
                 );
             }
         };
 
-        socket.on("typing_start", (data) =>
-            handleTyping(data, true)
-        );
+        socket.on("typing_start", (data) => {
+            void handleTyping(data, true);
+        });
 
-        socket.on("typing_stop", (data) =>
-            handleTyping(data, false)
-        );
+        socket.on("typing_stop", (data) => {
+            void handleTyping(data, false);
+        });
+
+        // =========================================================
+        // CHAT: EDIT MESSAGE
+        // =========================================================
 
         socket.on("edit_message", async (data = {}) => {
             try {
@@ -984,9 +1233,9 @@ export const initializeSocket = (io) => {
             }
         });
 
-        // ---------------------------------------------------------
+        // =========================================================
         // CHAT: DELETE MESSAGE
-        // ---------------------------------------------------------
+        // =========================================================
 
         socket.on("delete_message", async (data = {}) => {
             try {
@@ -1026,9 +1275,9 @@ export const initializeSocket = (io) => {
             }
         });
 
-        // ---------------------------------------------------------
-        // INTERVIEW DISCONNECT NOTIFICATION
-        // ---------------------------------------------------------
+        // =========================================================
+        // INTERVIEW: DISCONNECTING NOTIFICATION
+        // =========================================================
 
         socket.on("disconnecting", (reason) => {
             for (const roomName of socket.rooms) {
@@ -1039,21 +1288,23 @@ export const initializeSocket = (io) => {
                 const interviewId =
                     roomName.slice("interview:".length);
 
-                // Notify other accounts, not another tab of the same user.
-                socket.to(roomName).emit("interview_user_left", {
-                    interviewId,
-                    userId,
-                    disconnected: true,
-                    reason,
-                });
+                socket.to(roomName).emit(
+                    "interview_user_left",
+                    {
+                        interviewId,
+                        userId,
+                        disconnected: true,
+                        reason,
+                    }
+                );
             }
         });
 
-        // ---------------------------------------------------------
-        // CONNECTION DISCONNECT / ONLINE STATUS
-        // ---------------------------------------------------------
+        // =========================================================
+        // DISCONNECT / OFFLINE PRESENCE
+        // =========================================================
 
-        socket.on("disconnect", async (reason) => {
+        socket.on("disconnect", (reason) => {
             console.log("[Socket] Disconnected:", {
                 socketId: socket.id,
                 userId,
@@ -1062,44 +1313,35 @@ export const initializeSocket = (io) => {
 
             const userSockets = onlineUsers.get(userId);
 
-            if (!userSockets) return;
+            if (!userSockets) {
+                return;
+            }
 
             userSockets.delete(socket.id);
 
-            // Keep the user online while another tab/device is connected.
+            // Another tab/device is still connected.
             if (userSockets.size > 0) {
                 console.log(
                     `[Socket] ${userId} still has ${userSockets.size} active socket(s)`
                 );
+
                 return;
             }
 
             onlineUsers.delete(userId);
 
             const lastSeen = new Date();
-
-            try {
-                await User.findByIdAndUpdate(userId, {
-                    isOnline: false,
-                    lastSeen,
-                });
+            void schedulePresenceSync(userId).then(() => {
+                // The user may have reconnected while the DB update ran.
+                if (onlineUsers.has(userId)) {
+                    return;
+                }
 
                 socket.broadcast.emit("user_offline", {
                     userId,
                     lastSeen,
                 });
-            } catch (error) {
-                console.error(
-                    "[Socket] Failed to update offline status:",
-                    error.message
-                );
-            }
+            });
         });
     });
-
-    async function setUserOnline(userId) {
-    await User.findByIdAndUpdate(userId, {
-        isOnline: true,
-    });
-}
 };

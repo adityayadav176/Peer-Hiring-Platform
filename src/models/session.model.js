@@ -90,6 +90,7 @@ const sessionSchema = new mongoose.Schema(
 
 // Helpful for listing active sessions belonging to a user.
 sessionSchema.index({ userId: 1, isActive: 1 });
+sessionSchema.index({refreshTokenExpiresAt: 1, expireAfterSeconds: 0})
 
 // Avoid OverwriteModelError during development.
 export const Session =

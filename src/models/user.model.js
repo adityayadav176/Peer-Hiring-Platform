@@ -1,7 +1,48 @@
-
 import mongoose, { Schema } from "mongoose";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
+
+const PASSWORD_BCRYPT_ROUNDS = 12;
+
+const normalizeOptionalString = (value) => {
+    if (value == null) return undefined;
+
+    const normalized = String(value).trim();
+
+    return normalized.length > 0 ? normalized : undefined;
+};
+
+const PRIVATE_FIELDS = new Set([
+    "password",
+    "phoneNo",
+    "googleId",
+    "githubId",
+    "facebookId",
+    "emailVerificationOTP",
+    "emailVerificationOTPExpiry",
+    "forgetPasswordOtp",
+    "forgetPasswordOtpExpiredAt",
+    "passwordResetToken",
+    "passwordResetTokenExpiresAt",
+    "deleteAccountOtp",
+    "deleteAccountOtpExpiredAt",
+    "refreshToken",
+    "twoFactorSecret",
+    "twoFactorEnabled",
+    "failedLoginAttempts",
+    "lockUntil",
+    "tokenVersion",
+    "accountStatus",
+    "__v",
+]);
+
+const removePrivateFields = (_doc, ret) => {
+    for (const field of PRIVATE_FIELDS) {
+        delete ret[field];
+    }
+
+    return ret;
+};
 
 const UserSchema = new Schema(
     {
@@ -9,7 +50,7 @@ const UserSchema = new Schema(
             type: String,
             required: true,
             trim: true,
-            maxlength: 100,
+            maxLength: 100,
         },
 
         email: {
@@ -18,62 +59,85 @@ const UserSchema = new Schema(
             unique: true,
             lowercase: true,
             trim: true,
-            maxlength: 254,
+            maxLength: 254,
         },
 
         coverImage: {
-            url: { type: String, default: "" },
-            public_id: { type: String, default: "" },
+            url: {
+                type: String,
+                default: "",
+                trim: true,
+            },
+            public_id: {
+                type: String,
+                default: "",
+                trim: true,
+            },
         },
 
         googleId: {
             type: String,
             unique: true,
             sparse: true,
+            select: false,
+            set: normalizeOptionalString,
         },
 
         githubId: {
             type: String,
             unique: true,
             sparse: true,
+            select: false,
+            set: normalizeOptionalString,
         },
 
         facebookId: {
             type: String,
             unique: true,
             sparse: true,
+            select: false,
+            set: normalizeOptionalString,
         },
 
         password: {
             type: String,
-            minlength: 8,
-            maxlength: 100,
+            minLength: 8,
+            maxLength: 100,
             select: false,
+
             validate: {
                 validator(value) {
-                    // Allow passwordless OAuth accounts.
-                    // For local accounts, enforce this in signup too.
                     return (
                         value == null ||
                         Buffer.byteLength(value, "utf8") <= 72
                     );
                 },
-                message: "Password must not exceed 72 UTF-8 bytes for bcrypt.",
+                message:
+                    "Password must not exceed 72 UTF-8 bytes for bcrypt.",
             },
         },
 
         avatar: {
-            url: { type: String, default: "" },
-            public_id: { type: String, default: "" },
+            url: {
+                type: String,
+                default: "",
+                trim: true,
+            },
+            public_id: {
+                type: String,
+                default: "",
+                trim: true,
+            },
         },
 
-        // Optional: omit this field if no phone number is provided.
         phoneNo: {
             type: String,
             unique: true,
             sparse: true,
             trim: true,
+            select: false,
             default: undefined,
+            set: normalizeOptionalString,
         },
 
         role: {
@@ -93,6 +157,7 @@ const UserSchema = new Schema(
             type: Number,
             default: 0,
             min: 0,
+            select: false,
         },
 
         emailVerificationOTP: {
@@ -141,6 +206,7 @@ const UserSchema = new Schema(
         lockUntil: {
             type: Date,
             default: null,
+            select: false,
         },
 
         accountStatus: {
@@ -148,8 +214,10 @@ const UserSchema = new Schema(
             enum: ["active", "blocked"],
             default: "active",
             required: true,
+            select: false,
         },
 
+        
         refreshToken: {
             type: String,
             select: false,
@@ -158,6 +226,7 @@ const UserSchema = new Schema(
         twoFactorEnabled: {
             type: Boolean,
             default: false,
+            select: false,
         },
 
         twoFactorSecret: {
@@ -169,6 +238,7 @@ const UserSchema = new Schema(
             type: Number,
             default: 0,
             min: 0,
+            select: false,
         },
 
         isOnline: {
@@ -183,6 +253,15 @@ const UserSchema = new Schema(
     },
     {
         timestamps: true,
+
+        // Prevent accidental exposure when a document is serialized.
+        toJSON: {
+            transform: removePrivateFields,
+        },
+
+        toObject: {
+            transform: removePrivateFields,
+        },
     }
 );
 
@@ -192,67 +271,100 @@ UserSchema.pre("save", async function () {
         return;
     }
 
-    if (Buffer.byteLength(this.password, "utf8") > 72) {
-        throw new Error("Password exceeds bcrypt's 72-byte limit.");
+    const passwordBytes = Buffer.byteLength(this.password, "utf8");
+
+    if (passwordBytes > 72) {
+        throw new Error(
+            "Password exceeds bcrypt's 72-byte limit."
+        );
     }
 
-    this.password = await bcrypt.hash(this.password, 10);
+    this.password = await bcrypt.hash(
+        this.password,
+        PASSWORD_BCRYPT_ROUNDS
+    );
 });
 
-// Compare the candidate password with the stored hash.
+// Compare a candidate password with the stored password hash.
 UserSchema.methods.isPasswordCorrect = async function (password) {
-    if (!this.password || typeof password !== "string") {
+    if (typeof password !== "string" || !this.password) {
         return false;
     }
 
     return bcrypt.compare(password, this.password);
 };
 
+// It is select:false, so authentication queries must explicitly select it.
+const getTokenPayload = function (sessionId) {
+    if (!this._id) {
+        throw new Error("User ID is required to generate a token.");
+    }
+
+    if (!mongoose.isValidObjectId(sessionId)) {
+        throw new Error("A valid sessionId is required.");
+    }
+
+    if (this.tokenVersion === undefined) {
+        throw new Error(
+            "tokenVersion must be explicitly selected before generating tokens."
+        );
+    }
+
+    return {
+        _id: this._id.toString(),
+        sessionId: sessionId.toString(),
+        tokenVersion: this.tokenVersion,
+    };
+};
+
 // Generate a short-lived access token.
 UserSchema.methods.generateAccessToken = function (sessionId) {
-    if (!process.env.ACCESS_TOKEN_SECRET) {
+    const secret = process.env.ACCESS_TOKEN_SECRET;
+
+    if (!secret) {
         throw new Error("ACCESS_TOKEN_SECRET is not configured.");
     }
 
-    if (!sessionId) {
-        throw new Error("sessionId is required.");
-    }
+    const payload = getTokenPayload.call(this, sessionId);
 
-    return jwt.sign(
-        {
-            _id: this._id.toString(),
-            sessionId,
-            tokenVersion: this.tokenVersion,
-        },
-        process.env.ACCESS_TOKEN_SECRET,
-        {
-            expiresIn: process.env.ACCESS_TOKEN_EXPIRY || "15m",
-        }
-    );
+    return jwt.sign(payload, secret, {
+        algorithm: "HS256",
+        expiresIn: process.env.ACCESS_TOKEN_EXPIRY || "15m",
+    });
 };
 
 // Generate a refresh token.
 UserSchema.methods.generateRefreshToken = function (sessionId) {
-    if (!process.env.REFRESH_TOKEN_SECRET) {
+    const secret = process.env.REFRESH_TOKEN_SECRET;
+
+    if (!secret) {
         throw new Error("REFRESH_TOKEN_SECRET is not configured.");
     }
 
-    if (!sessionId) {
-        throw new Error("sessionId is required.");
-    }
+    const payload = getTokenPayload.call(this, sessionId);
 
-    return jwt.sign(
-        {
-            _id: this._id.toString(),
-            sessionId,
-            tokenVersion: this.tokenVersion,
-        },
-        process.env.REFRESH_TOKEN_SECRET,
-        {
-            expiresIn: process.env.REFRESH_TOKEN_EXPIRY || "30d",
-        }
-    );
+    return jwt.sign(payload, secret, {
+        algorithm: "HS256",
+        expiresIn: process.env.REFRESH_TOKEN_EXPIRY || "30d",
+    });
 };
+
+// Email must be unique
+UserSchema.index(
+    { email: 1 },
+    { unique: true }
+);
+
+// Phone must be unique when provided
+UserSchema.index(
+    { phoneNo: 1 },
+    {
+        unique: true,
+        partialFilterExpression: {
+            phoneNo: { $type: "string" }
+        }
+    }
+);
 
 export const User =
     mongoose.models.User ||
