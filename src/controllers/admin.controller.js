@@ -1314,8 +1314,8 @@ const getAdminProfile = asyncHandler(async (req, res) => {
   );
 });
 
-const ACCESS_TOKEN_DURATION = process.env.ACCESS_TOKEN_EXPIRY;
-const REFRESH_TOKEN_DURATION = process.env.REFRESH_TOKEN_EXPIRY;
+const ACCESS_TOKEN_DURATION = 15 * 60 * 1000; // 15 minutes
+const REFRESH_TOKEN_DURATION = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 const cookieOptions = {
   httpOnly: true,
