@@ -439,36 +439,57 @@ const registerUser = asyncHandler(async (req, res) => {
 });
 
 const loginUser = asyncHandler(async (req, res) => {
-    const { email, phoneNo, password } = req.body;
+    const { email, phoneNo, password } = req.body || {};
 
-    if ( typeof password !== "string" || !password || (!email && !phoneNo)) {
-        throw new ApiError(
-            400,
-            "Email or phone number and password are required."
-        );
+    // Validate required credentials.
+    if (typeof password !== "string" || !password) {
+        throw new ApiError(400, "Password is required.");
     }
 
-    if ((email !== undefined && typeof email !== "string") ||(phoneNo !== undefined && typeof phoneNo !== "string")) {
+    if (!email && !phoneNo) {
+        throw new ApiError(400, "Email or phone number is required.");
+    }
+
+    // Validate credential types.
+    if (
+        (email !== undefined && typeof email !== "string") ||
+        (phoneNo !== undefined && typeof phoneNo !== "string")
+    ) {
         throw new ApiError(400, "Invalid login credentials.");
     }
 
+    // Normalize credentials.
     const normalizedEmail = email?.trim().toLowerCase();
     const normalizedPhone = phoneNo?.trim();
 
-    if (normalizedEmail && normalizedEmail.length > 254 ||normalizedPhone && !/^\+?[0-9]{7,15}$/.test(normalizedPhone)) {
-        throw new ApiError(400, "Invalid login credentials.");
+    // Validate email and phone formats.
+    if (
+        normalizedEmail &&
+        normalizedEmail.length > 254
+    ) {
+        throw new ApiError(400, "Invalid email address.");
+    }
+
+    if (
+        normalizedPhone &&
+        !/^\+?[0-9]{7,15}$/.test(normalizedPhone)
+    ) {
+        throw new ApiError(400, "Invalid phone number.");
     }
 
     if (!normalizedEmail && !normalizedPhone) {
         throw new ApiError(400, "A valid email or phone number is required.");
     }
 
-    if (!process.env.ACCESS_TOKEN_SECRET ||!process.env.REFRESH_TOKEN_SECRET) {
-    throw new ApiError(
-        500,
-        "Authentication configuration error."
-    );
+    // Validate authentication configuration.
+    if (
+        !process.env.ACCESS_TOKEN_SECRET ||
+        !process.env.REFRESH_TOKEN_SECRET
+    ) {
+        throw new ApiError(500, "Authentication configuration error.");
     }
+
+    // ADMIN LOGIN: Check Admin first using email only.   
 
     if (normalizedEmail) {
         const admin = await Admin.findOne({
@@ -477,17 +498,21 @@ const loginUser = asyncHandler(async (req, res) => {
             "+password +failedLoginAttempts +lockUntil +refreshToken"
         );
 
+        // If an Admin exists, authenticate only as Admin.
         if (admin) {
             await clearExpiredLoginLock(Admin, admin);
 
             if (admin.lockUntil && admin.lockUntil > new Date()) {
+                const lock = getLockResponse(admin.lockUntil);
+
                 throw new ApiError(
                     423,
-                    `Account temporarily locked. Try again in ${getLockResponse(admin.lockUntil).remainingMinutes} minutes.`
+                    `Account temporarily locked. Try again in ${lock.remainingMinutes} minutes.`
                 );
             }
 
-            const isPasswordValid = await admin.isPasswordCorrect(password);
+            const isPasswordValid =
+                await admin.isPasswordCorrect(password);
 
             if (!isPasswordValid) {
                 const attempts = await recordFailedLogin(
@@ -506,24 +531,20 @@ const loginUser = asyncHandler(async (req, res) => {
             }
 
             if (!admin.isActive) {
-                throw new ApiError(
-                    403,
-                    "This admin account is inactive."
-                );
+                throw new ApiError(403, "This admin account is inactive.");
             }
 
+            // Generate Admin tokens.
             const accessToken = admin.generateAccessToken();
             const refreshToken = admin.generateRefreshToken();
 
             const decodedRefreshToken = jwt.decode(refreshToken);
 
             if (!decodedRefreshToken?.exp) {
-                throw new ApiError(
-                    500,
-                    "Unable to generate refresh token."
-                );
+                throw new ApiError(500, "Unable to generate refresh token.");
             }
 
+            // Update Admin login state.
             admin.failedLoginAttempts = 0;
             admin.lockUntil = null;
             admin.refreshToken = hashToken(refreshToken);
@@ -560,11 +581,15 @@ const loginUser = asyncHandler(async (req, res) => {
     const userQuery = [];
 
     if (normalizedEmail) {
-        userQuery.push({ email: normalizedEmail });
+        userQuery.push({
+            email: normalizedEmail,
+        });
     }
 
     if (normalizedPhone) {
-        userQuery.push({ phoneNo: normalizedPhone });
+        userQuery.push({
+            phoneNo: normalizedPhone,
+        });
     }
 
     const user = await User.findOne({
@@ -580,33 +605,35 @@ const loginUser = asyncHandler(async (req, res) => {
         );
     }
 
+    // Validate account role.
     if (!["User", "recruiter"].includes(user.role)) {
-        throw new ApiError(
-            403,
-            "This account role is not permitted to log in."
-        );
+        throw new ApiError(403, "This account role is not permitted to log in.");
     }
 
+    // Validate account status.
     if (user.accountStatus !== "active") {
-        throw new ApiError(
-            403,
-            "Your account is blocked. Please contact support."
-        );
+        throw new ApiError(403, "Your account is blocked. Please contact support.");
     }
 
     await clearExpiredLoginLock(User, user);
 
     if (user.lockUntil && user.lockUntil > new Date()) {
+        const lock = getLockResponse(user.lockUntil);
+
         throw new ApiError(
             423,
-            `Account temporarily locked. Try again in ${getLockResponse(user.lockUntil).remainingMinutes} minutes.`
+            `Account temporarily locked. Try again in ${lock.remainingMinutes} minutes.`
         );
     }
 
+    // Validate password.
     const isPasswordValid = await user.isPasswordCorrect(password);
 
     if (!isPasswordValid) {
-        const attempts = await recordFailedLogin(User, user._id);
+        const attempts = await recordFailedLogin(
+            User,
+            user._id
+        );
 
         if (attempts >= MAX_LOGIN_ATTEMPTS) {
             throw new ApiError(
@@ -621,11 +648,20 @@ const loginUser = asyncHandler(async (req, res) => {
         );
     }
 
+    // Reset failed login attempts after successful password validation.
+    user.failedLoginAttempts = 0;
+    user.lockUntil = null;
+
+    await user.save({
+        validateBeforeSave: false,
+    });
+
+    // Two-factor authentication.
     if (user.twoFactorEnabled) {
         const twoFactorToken = jwt.sign(
             {
                 userId: user._id.toString(),
-                type: user.role === "recruiter" ? "recruiter" : "User",
+                type: user.role,
                 purpose: "login-2fa",
                 tokenVersion: user.tokenVersion || 0,
             },
@@ -643,20 +679,23 @@ const loginUser = asyncHandler(async (req, res) => {
                     twoFactorRequired: true,
                     twoFactorToken,
                     userId: user._id,
-                    type: user.role === "recruiter" ? "recruiter" : "User",
+                    type: user.role,
                 },
                 "Two-factor authentication required."
             )
         );
     }
 
-    const { session, accessToken, refreshToken, safeUser, } = await createUserSession(req, user);
+    // Create User/Recruiter session.
+    const {
+        session,
+        accessToken,
+        refreshToken,
+        safeUser,
+    } = await createUserSession(req, user);
 
     if (!safeUser || !session || !accessToken || !refreshToken) {
-        throw new ApiError(
-            500,
-            "Unable to complete login."
-        );
+        throw new ApiError(500, "Unable to complete login.");
     }
 
     setAuthCookies(res, accessToken, refreshToken);
@@ -665,7 +704,7 @@ const loginUser = asyncHandler(async (req, res) => {
         new ApiResponse(
             200,
             {
-                type: user.role === "recruiter" ? "recruiter" : "User",
+                type: user.role,
                 user: safeUser,
                 session: createSafeSession(session),
             },
