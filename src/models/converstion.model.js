@@ -90,11 +90,6 @@ conversationSchema.index({
   lastMessageAt: -1,
 });
 
-// Quickly retrieve chats associated with an application.
-conversationSchema.index({
-  application: 1,
-});
-
 
 conversationSchema.index(
   { application: 1 },

@@ -349,23 +349,6 @@ UserSchema.methods.generateRefreshToken = function (sessionId) {
     });
 };
 
-// Email must be unique
-UserSchema.index(
-    { email: 1 },
-    { unique: true }
-);
-
-// Phone must be unique when provided
-UserSchema.index(
-    { phoneNo: 1 },
-    {
-        unique: true,
-        partialFilterExpression: {
-            phoneNo: { $type: "string" }
-        }
-    }
-);
-
 export const User =
     mongoose.models.User ||
     mongoose.model("User", UserSchema);

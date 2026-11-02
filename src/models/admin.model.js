@@ -154,9 +154,6 @@ adminSchema.methods.generateRefreshToken = function () {
         }
     );
 };
-
-adminSchema.index({ email: 1 }, { unique: true });
-
 const Admin =
     mongoose.models.Admin ||
     mongoose.model("Admin", adminSchema);

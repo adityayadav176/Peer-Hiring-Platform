@@ -1,17 +1,15 @@
 
 import dotenv from "dotenv";
 dotenv.config();
-
 import http from "node:http";
 import { Server } from "socket.io";
-
 import { connectToMongo } from "./db/db.js";
 import { app } from "./app.js";
 import { APP_NAME } from "./constant/constant.js";
 import { initializeSocket } from "./socket/socket.server.js";
-import "./config/notification.worker.js";
+// import "./config/notification.worker.js";
 
-const PORT = process.env.PORT || 9000;
+const PORT = process.env.PORT;
 const CLIENT_URL = process.env.CLIENT_URL;
 
 const server = http.createServer(app);

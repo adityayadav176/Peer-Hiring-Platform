@@ -1,5 +1,5 @@
-const MONGO_DB_NAME="AuthServiceDb"
-const APP_NAME="AuthService"
-const PROJECT_NAME="MyAPP"
+const MONGO_DB_NAME="PeerHiringDB"
+const APP_NAME="PEER.HIRING.COM"
+const PROJECT_NAME="PEER.HIRING.COM"
 
 export {MONGO_DB_NAME, APP_NAME, PROJECT_NAME};
