@@ -8,7 +8,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "nodemon src/index.js",
-    "start": "node src/index",
+    "start": "node src/index.js",
     "create-admin": "node src/scripts/createAdmin.js"
   },
   "dependencies": {
