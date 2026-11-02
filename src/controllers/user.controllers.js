@@ -447,7 +447,7 @@ const loginUser = asyncHandler(async (req, res) => {
     }
 
     if (!email && !phoneNo) {
-        throw new ApiError(400, "Email or phone number is required.");
+        throw new ApiError(400, "Email or phone nu`mber is required.");
     }
 
     // Validate credential types.
@@ -493,10 +493,16 @@ const loginUser = asyncHandler(async (req, res) => {
 
     if (normalizedEmail) {
         const admin = await Admin.findOne({
-            email: normalizedEmail,
-        }).select(
-            "+password +failedLoginAttempts +lockUntil +refreshToken"
-        );
+    email: normalizedEmail,
+}).select(
+    "+password +failedLoginAttempts +lockUntil +refreshToken"
+);
+
+console.log("Login email:", normalizedEmail);
+console.log("Admin found:", Boolean(admin));
+console.log("Admin ID:", admin?._id);
+console.log("Password selected:", Boolean(admin?.password));
+        
 
         // If an Admin exists, authenticate only as Admin.
         if (admin) {
@@ -527,7 +533,7 @@ const loginUser = asyncHandler(async (req, res) => {
                     );
                 }
 
-                throw new ApiError(401, "Invalid email or password.");
+                throw new ApiError(400, "Invalid email or password.");
             }
 
             if (!admin.isActive) {

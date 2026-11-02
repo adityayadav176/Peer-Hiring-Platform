@@ -22,17 +22,12 @@ const createAdmin = async () => {
             process.exit(0);
         }
 
-        const hashedPassword = await bcrypt.hash(
-            process.env.ADMIN_PASSWORD,
-            12
-        );
-
         const admin = await Admin.create({
-            singletonKey: "PEER_HIRING_OWNER",
-            name: process.env.ADMIN_NAME,
-            email: process.env.ADMIN_EMAIL,
-            password: hashedPassword,
-        });
+    singletonKey: "PEER_HIRING_OWNER",
+    name: process.env.ADMIN_NAME,
+    email: process.env.ADMIN_EMAIL,
+    password: process.env.ADMIN_PASSWORD,
+});
 
         console.log("Admin created successfully");
         console.log("Admin ID:", admin._id);
