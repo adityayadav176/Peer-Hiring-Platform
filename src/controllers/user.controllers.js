@@ -696,7 +696,7 @@ console.log("Password selected:", Boolean(admin?.password));
     const {
         session,
         accessToken,
-        refreshToken,
+        refreshToken, 
         safeUser,
     } = await createUserSession(req, user);
 

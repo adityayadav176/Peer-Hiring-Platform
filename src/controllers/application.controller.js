@@ -190,16 +190,20 @@ const getMyApplications = asyncHandler(async (req, res) => {
     throw new ApiError(401, "Unauthorized access");
   }
 
+  // Pagination
   const page = Math.max(
     1,
     Number.parseInt(req.query.page, 10) || 1
   );
+
   const limit = Math.min(
     50,
     Math.max(1, Number.parseInt(req.query.limit, 10) || 10)
   );
+
   const skip = (page - 1) * limit;
 
+  // Application filter
   const filter = {
     candidateId: userId,
     isDeleted: false,
@@ -207,13 +211,67 @@ const getMyApplications = asyncHandler(async (req, res) => {
 
   const [applications, totalApplications] = await Promise.all([
     Application.find(filter)
-      .populate(
+      // Job information
+      .populate({
+        path: "jobId",
+        select: [
+          "title",
+          "description",
+          "salary",
+          "location",
+          "workspaceType",
+          "employmentType",
+          "experienceLevel",
+          "category",
+        ].join(" "),
+      })
+
+      // Company information
+      .populate({
+        path: "companyId",
+        select: [
+          "name",
+          "logo",
+          "description",
+          "industry",
+          "companySize",
+          "foundedYear",
+          "headquarters",
+          "socialLinks",
+          "isVerified",
+        ].join(" "),
+      })
+
+      // Resume information
+      // Resume information
+.populate({
+  path: "resumeId",
+  select: [
+    "title",
+    "target",
+    "resume.url",
+    "resume.originalName",
+    "resume.sizeBytes",
+  ].join(" "),
+})
+
+      // Application information
+      .select([
         "jobId",
-        "title salary companyId location employmentType"
-      )
-      .populate("resumeId", "resume originalName")
-      .populate("companyId", "name")
-      .sort({ createdAt: -1 })
+        "companyId",
+        "resumeId",
+        "status",
+        "messageToRecruiter",
+        "reviewAt",
+        "closedAt",
+        "shortlistedAt",
+        "atsScore",
+        "atsStatus",
+        "createdAt",
+        "updatedAt",
+      ].join(" "))
+
+      .sort({ createdAt: -1, _id: -1 })
       .skip(skip)
       .limit(limit)
       .lean(),
@@ -418,11 +476,64 @@ const getMyApplicationById = asyncHandler(async (req, res) => {
     candidateId: userId,
     isDeleted: false,
   })
-    .populate("jobId")
-    .populate("companyId", "name logo")
-    .populate("resumeId", "title originalName")
-    .populate("interviewId")
-    .select("-recruiterNotes");
+    // Job information
+    .populate({
+      path: "jobId",
+      select: [
+        "title",
+        "description",
+        "salary",
+        "location",
+        "workspaceType",
+        "employmentType",
+        "experienceLevel",
+        "category",
+      ].join(" "),
+    })
+
+    // Company information
+    .populate({
+      path: "companyId",
+      select: [
+        "name",
+        "logo",
+        "description",
+        "industry",
+        "companySize",
+        "foundedYear",
+        "headquarters",
+        "website",
+        "socialLinks",
+        "isVerified",
+      ].join(" "),
+    })
+
+    // Resume information
+    .populate({
+      path: "resumeId",
+      select: [
+        "title",
+        "originalName",
+        "url",
+        "publicId",
+        "fileSize",
+        "createdAt",
+      ].join(" "),
+    })
+
+    // Application-specific fields
+    .select([
+      "jobId",
+      "resumeId",
+      "status",
+      "messageToRecruiter",
+      "reviewAt",
+      "closedAt",
+      "recruiterNotes",
+      "shortlistedAt",
+      "atsScore",
+      "atsStatus",
+    ].join(" "));
 
   if (!application) {
     throw new ApiError(404, "Application not found");

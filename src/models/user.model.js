@@ -329,7 +329,7 @@ UserSchema.methods.generateAccessToken = function (sessionId) {
 
     return jwt.sign(payload, secret, {
         algorithm: "HS256",
-        expiresIn: process.env.ACCESS_TOKEN_EXPIRY || "15m",
+        expiresIn: process.env.ACCESS_TOKEN_EXPIRY,
     });
 };
 

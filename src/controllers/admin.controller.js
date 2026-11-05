@@ -73,7 +73,7 @@ const getAllUsers = asyncHandler(async (req, res) => {
 
   const [users, totalUsers] = await Promise.all([
     User.find(query)
-      .select("-password -refreshToken -otp -otpExpiredAt")
+      .select("-password -refreshToken -otp -otpExpiredAt +accountStatus +phoneNo")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limitNumber)
@@ -101,37 +101,25 @@ const getUserById = asyncHandler(async (req, res) => {
     const { userId } = req.params;
 
     if (!userId || !mongoose.isValidObjectId(userId)) {
-        throw new ApiError(404, "Invalid UserId");
+        throw new ApiError(400, "Invalid UserId");
     }
 
     const user = await User.findById(userId)
-        .select(
-            "-password " +
-            "-refreshToken " +
-            "-emailVerificationOTP " +
-            "-emailVerificationOTPExpiry " +
-            "-forgetPasswordOtp " +
-            "-forgetPasswordOtpExpiredAt " +
-            "-passwordResetToken " +
-            "-passwordResetTokenExpiresAt " +
-            "-deleteAccountOtp " +
-            "-deleteAccountOtpExpiredAt " +
-            "-twoFactorSecret"
-        );
+        .select("+accountStatus +phoneNo")
+        .lean();
 
-    if(!user) {
+    if (!user) {
         throw new ApiError(404, "User Not Found");
     }
 
-    return res.status(200)
-    .json(
+    return res.status(200).json(
         new ApiResponse(
             200,
             user,
             "User fetched successfully"
         )
-    )
-})
+    );
+});
 
 const blockUser = asyncHandler(async (req, res) => {
     const { userId } = req.params;
@@ -204,7 +192,7 @@ const unblockUser = asyncHandler(async (req, res) => {
         throw new ApiError(400, "Invalid User ID");
     }
 
-    const user = await User.findById(userId);
+    const user = await User.findById(userId).populate("accountStatus");
 
     if (!user) {
         throw new ApiError(404, "User not found");
